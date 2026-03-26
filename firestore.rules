@@ -1,0 +1,366 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: menu
+    // Fields:
+    //   - id: string (required)
+    //   - name: string (required, size < 100)
+    //   - description: string (required, size < 500)
+    //   - price: number (required, positive)
+    //   - category: string (required, enum: Appetizer, Main, Dessert, Drink)
+    //   - available: bool (required)
+    //   - image: string (optional, URL)
+    //
+    // Collection: bookings
+    // Fields:
+    //   - id: string (required)
+    //   - customerName: string (required, size < 100)
+    //   - customerEmail: string (required, email)
+    //   - tableNumber: int (required, positive)
+    //   - date: string (required, YYYY-MM-DD)
+    //   - time: string (required, HH:MM)
+    //   - guests: int (required, positive, max 20)
+    //   - status: string (required, enum: Confirmed, Completed, Cancelled)
+    //   - orderedItems: list (optional, max 50 items)
+    //   - createdAt: timestamp (required)
+    //
+    // Collection: tables
+    // Fields:
+    //   - number: int (required, positive)
+    //   - capacity: int (required, positive)
+    //   - status: string (required, enum: Available, Reserved, Occupied)
+    //
+    // Collection: feedback
+    // Fields:
+    //   - id: string (required)
+    //   - uid: string (required)
+    //   - customerName: string (required, size < 100)
+    //   - rating: int (required, 1-5)
+    //   - comment: string (optional, size < 1000)
+    //   - createdAt: timestamp (required)
+    //
+    // Collection: waitlist
+    // Fields:
+    //   - id: string (required)
+    //   - customerName: string (required, size < 100)
+    //   - partySize: int (required, positive)
+    //   - phoneNumber: string (optional)
+    //   - status: string (required, enum: Waiting, Notified, Seated, Cancelled)
+    //   - estimatedWaitTime: int (optional)
+    //   - createdAt: timestamp (required)
+    //
+    // Collection: employees
+    // Fields:
+    //   - id: string (required)
+    //   - firstName: string (required)
+    //   - lastName: string (required)
+    //   - name: string (required)
+    //   - email: string (optional)
+    //   - phone: string (optional)
+    //   - address: string (optional)
+    //   - employeeCode: string (required, 4 digits)
+    //   - designation: string (required)
+    //   - roles: list (required)
+    //   - active: bool (required)
+    //   - createdBy: string (optional)
+    //   - createdAt: timestamp (optional)
+    //
+    // Collection: users
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required)
+    //   - roles: list (required, enum: Admin, Manager, Chef, Waiter, Accountant, Customer)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        (request.auth.token.get('email', '') == "ui.bhaumik@gmail.com") ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['Admin', 'Manager', 'Accountant']))
+      );
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && (
+        (request.auth.token.get('email', '') == "ui.bhaumik@gmail.com") ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['Admin']))
+      );
+    }
+
+    function isStaff() {
+      return isAuthenticated() && (
+        (request.auth.token.get('email', '') == "ui.bhaumik@gmail.com") ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['Admin', 'Manager', 'Chef', 'Waiter', 'Accountant']))
+      );
+    }
+
+    function isBookingManager() {
+      return isAuthenticated() && (
+        (request.auth.token.get('email', '') == "ui.bhaumik@gmail.com") ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roles', []).hasAny(['Admin', 'Manager', 'Accountant']))
+      );
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function areBookingSensitiveFieldsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['id', 'customerName', 'customerEmail', 'phoneNumber', 'tableNumber', 'date', 'time', 'guests', 'uid', 'createdAt']);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUrl(url) {
+      return url is string && (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}$");
+    }
+
+    function isValidTimeString(timeStr) {
+      return timeStr is string && timeStr.matches("^\\d{2}:\\d{2}$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidMenuItem(data) {
+      return hasOnlyAllowedFields(['id', 'name', 'description', 'price', 'category', 'available', 'image']) &&
+             data.keys().hasAll(['id', 'name', 'description', 'price', 'category', 'available']) &&
+             data.id is string &&
+             data.name is string && data.name.size() < 100 &&
+             data.description is string && data.description.size() < 500 &&
+             data.price is number && data.price >= 0 &&
+             data.category in ['Appetizer', 'Main', 'Dessert', 'Drink'] &&
+             data.available is bool &&
+             (!('image' in data) || isValidUrl(data.image));
+    }
+
+    function isValidBooking(data) {
+      return hasOnlyAllowedFields(['id', 'customerName', 'customerEmail', 'phoneNumber', 'tableNumber', 'date', 'time', 'guests', 'status', 'createdAt', 'orderedItems', 'uid', 'rating', 'comment', 'pointsEarned', 'pointsRedeemed']) &&
+             data.keys().hasAll(['id', 'customerName', 'customerEmail', 'tableNumber', 'date', 'time', 'guests', 'status', 'createdAt']) &&
+             data.id is string &&
+             data.customerName is string && data.customerName.size() < 100 &&
+             data.customerEmail is string && isValidEmail(data.customerEmail) &&
+             (!('phoneNumber' in data) || data.phoneNumber is string) &&
+             data.tableNumber is int && data.tableNumber > 0 &&
+             isValidDateString(data.date) &&
+             isValidTimeString(data.time) &&
+             data.guests is int && data.guests > 0 && data.guests <= 20 &&
+             data.status in ['Confirmed', 'Completed', 'Cancelled', 'Fulfilled'] &&
+             data.createdAt is timestamp &&
+             (!('orderedItems' in data) || (data.orderedItems is list && data.orderedItems.size() <= 50)) &&
+             (!('uid' in data) || data.uid is string) &&
+             (!('rating' in data) || (data.rating is int && data.rating >= 1 && data.rating <= 5)) &&
+             (!('comment' in data) || (data.comment is string && data.comment.size() < 1000)) &&
+             (!('pointsEarned' in data) || data.pointsEarned is int) &&
+             (!('pointsRedeemed' in data) || data.pointsRedeemed is int);
+    }
+
+    function isValidTable(data) {
+      return hasOnlyAllowedFields(['number', 'capacity', 'status']) &&
+             data.keys().hasAll(['number', 'capacity', 'status']) &&
+             data.number is int && data.number > 0 &&
+             data.capacity is int && data.capacity > 0 &&
+             data.status in ['Available', 'Reserved', 'Occupied'];
+    }
+
+    function isValidFeedback(data) {
+      return hasOnlyAllowedFields(['id', 'uid', 'customerName', 'rating', 'comment', 'createdAt']) &&
+             data.keys().hasAll(['id', 'customerName', 'rating', 'createdAt']) &&
+             data.id is string &&
+             data.customerName is string && data.customerName.size() < 100 &&
+             data.rating is int && data.rating >= 1 && data.rating <= 5 &&
+             (!('comment' in data) || (data.comment is string && data.comment.size() < 1000)) &&
+             data.createdAt is timestamp &&
+             (!('uid' in data) || data.uid is string);
+    }
+
+    function isValidWaitlistEntry(data) {
+      return hasOnlyAllowedFields(['id', 'customerName', 'partySize', 'phoneNumber', 'status', 'estimatedWaitTime', 'createdAt']) &&
+             data.keys().hasAll(['id', 'customerName', 'partySize', 'status', 'createdAt']) &&
+             data.id is string &&
+             data.customerName is string && data.customerName.size() < 100 &&
+             data.partySize is int && data.partySize > 0 &&
+             data.status in ['Waiting', 'Notified', 'Seated', 'Cancelled'] &&
+             (!('phoneNumber' in data) || data.phoneNumber is string) &&
+             (!('estimatedWaitTime' in data) || data.estimatedWaitTime is int) &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidEmployee(data) {
+      return data.id is string &&
+             data.firstName is string &&
+             data.lastName is string &&
+             data.employeeCode is string &&
+             data.roles is list &&
+             data.active is bool;
+    }
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'email', 'roles', 'employeeCode', 'displayName', 'firstName', 'lastName', 'loyaltyPoints', 'phoneNumber']) &&
+             data.keys().hasAll(['uid', 'roles']) &&
+             data.uid is string &&
+             (!('email' in data) || data.email == "" || isValidEmail(data.email)) &&
+             data.roles is list && data.roles.size() > 0 &&
+             data.roles.hasOnly(['Admin', 'Manager', 'Chef', 'Waiter', 'Accountant', 'Customer']) &&
+             (!('employeeCode' in data) || data.employeeCode is string) &&
+             (!('displayName' in data) || data.displayName is string) &&
+             (!('firstName' in data) || data.firstName is string) &&
+             (!('lastName' in data) || data.lastName is string) &&
+             (!('loyaltyPoints' in data) || data.loyaltyPoints is int) &&
+             (!('phoneNumber' in data) || data.phoneNumber is string);
+    }
+
+    function isValidOrder(data) {
+      return hasOnlyAllowedFields(['id', 'uid', 'customerName', 'customerEmail', 'phoneNumber', 'address', 'items', 'total', 'paymentMethod', 'cardDetails', 'status', 'createdAt', 'pointsEarned', 'pointsRedeemed']) &&
+             data.keys().hasAll(['customerName', 'customerEmail', 'phoneNumber', 'address', 'items', 'total', 'paymentMethod', 'status', 'createdAt']) &&
+             (!('id' in data) || data.id is string) &&
+             (!('uid' in data) || data.uid is string) &&
+             data.customerName is string && data.customerName.size() < 100 &&
+             data.customerEmail is string && isValidEmail(data.customerEmail) &&
+             data.phoneNumber is string &&
+             data.address is string && data.address.size() < 500 &&
+             data.items is list && data.items.size() > 0 &&
+             data.total is number && data.total >= 0 &&
+             data.paymentMethod in ['Cash', 'Credit Card'] &&
+             (!('cardDetails' in data) || (
+               data.cardDetails is map &&
+               data.cardDetails.keys().hasOnly(['number', 'expiry', 'cvv']) &&
+               data.cardDetails.number is string &&
+               data.cardDetails.expiry is string &&
+               data.cardDetails.cvv is string
+             )) &&
+             data.status in ['Pending', 'Preparing', 'Out for Delivery', 'Delivered', 'Cancelled', 'Fulfilled'] &&
+             (!('pointsEarned' in data) || data.pointsEarned is int) &&
+             (!('pointsRedeemed' in data) || data.pointsRedeemed is int) &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidLoyaltyTransaction(data) {
+      return hasOnlyAllowedFields(['id', 'uid', 'type', 'amount', 'description', 'referenceId', 'createdAt']) &&
+             data.keys().hasAll(['id', 'uid', 'type', 'amount', 'createdAt']) &&
+             data.id is string &&
+             data.uid is string &&
+             data.type in ['Earned', 'Redeemed'] &&
+             data.amount is int &&
+             data.description is string &&
+             (!('referenceId' in data) || data.referenceId is string) &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isStaff();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && 
+                    (isOwner(userId) || isAdmin());
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && 
+                    (isOwner(userId) || isStaff());
+    }
+
+    match /loyaltyTransactions/{transactionId} {
+      allow read: if isStaff() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow create: if isStaff() && isValidLoyaltyTransaction(request.resource.data);
+      allow update, delete: if isAdmin();
+    }
+
+    match /menu/{itemId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidMenuItem(request.resource.data);
+      allow update, delete: if isStaff();
+    }
+
+    match /bookings/{bookingId} {
+      allow get: if true;
+      allow list: if isStaff() || 
+                   (isAuthenticated() && resource.data.customerEmail == request.auth.token.email) || 
+                   (resource.data.status == 'Confirmed');
+      
+      // Allow creation by booking managers OR by customers (non-staff)
+      allow create: if (isBookingManager() || !isStaff()) && isValidBooking(request.resource.data);
+      
+      // Allow update/delete by booking managers OR by the customer who owns the booking
+      // Also allow unauthenticated updates if sensitive fields are unchanged (for guest management)
+      allow update: if (isBookingManager() || 
+                        (isAuthenticated() && resource.data.customerEmail == request.auth.token.email) ||
+                        (!isAuthenticated() && areBookingSensitiveFieldsUnchanged())) && 
+                    isValidBooking(request.resource.data);
+      allow delete: if isBookingManager() || (isAuthenticated() && resource.data.customerEmail == request.auth.token.email);
+    }
+
+    match /tables/{tableId} {
+      allow read: if true;
+      allow create: if isValidTable(request.resource.data);
+      allow update, delete: if isStaff();
+    }
+
+    match /feedback/{feedbackId} {
+      allow read: if isStaff() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow create: if isValidFeedback(request.resource.data) && (!('uid' in request.resource.data) || request.resource.data.uid == 'guest' || request.resource.data.uid == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    match /waitlist/{entryId} {
+      allow read: if isStaff() || (resource.data.id == entryId); // Allow someone to see their own entry if they have the ID
+      allow create: if isValidWaitlistEntry(request.resource.data);
+      allow update: if isStaff() && isValidWaitlistEntry(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /employees/{employeeId} {
+      // Allow reading an employee by ID for login purposes (checking if code exists)
+      allow get: if true;
+      allow list: if isStaff();
+      
+      // Only admins/managers can create/update, but only SuperAdmin can touch Admin employees
+      allow create: if isAdmin() && isValidEmployee(request.resource.data) &&
+                    (!request.resource.data.roles.hasAny(['Admin']) || isSuperAdmin());
+      allow update: if isAdmin() && isValidEmployee(request.resource.data) &&
+                    (!resource.data.roles.hasAny(['Admin']) || isSuperAdmin()) &&
+                    (!request.resource.data.roles.hasAny(['Admin']) || isSuperAdmin());
+      allow delete: if isSuperAdmin();
+    }
+
+    match /orders/{orderId} {
+      allow read: if isStaff() || (isAuthenticated() && resource.data.get('uid', '') == request.auth.uid);
+      allow create: if isValidOrder(request.resource.data) && 
+                    (!('uid' in request.resource.data) || (isAuthenticated() && request.resource.data.uid == request.auth.uid));
+      allow update: if isStaff() && isValidOrder(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

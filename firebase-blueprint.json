@@ -1,0 +1,211 @@
+{
+  "entities": {
+    "MenuItem": {
+      "title": "MenuItem",
+      "description": "A food or drink item on the restaurant menu.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier for the menu item." },
+        "name": { "type": "string", "description": "Name of the dish or drink." },
+        "description": { "type": "string", "description": "Description of the item." },
+        "price": { "type": "number", "description": "Price of the item in USD." },
+        "category": { "type": "string", "enum": ["Appetizer", "Main", "Dessert", "Drink"], "description": "Category of the item." },
+        "available": { "type": "boolean", "description": "Whether the item is currently available for order." },
+        "image": { "type": "string", "description": "URL to an image of the item." }
+      },
+      "required": ["id", "name", "price", "category", "available"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "A table reservation made by a customer.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier for the booking." },
+        "customerName": { "type": "string", "description": "Name of the customer." },
+        "customerEmail": { "type": "string", "description": "Email of the customer." },
+        "tableNumber": { "type": "integer", "description": "The table number assigned to the booking." },
+        "date": { "type": "string", "format": "date", "description": "The date of the reservation (YYYY-MM-DD)." },
+        "time": { "type": "string", "description": "The time of the reservation (HH:MM)." },
+        "guests": { "type": "integer", "description": "Number of guests in the party." },
+        "status": { "type": "string", "enum": ["Confirmed", "Completed", "Cancelled"], "description": "Current status of the booking." },
+        "orderedItems": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "itemId": { "type": "string" },
+              "quantity": { "type": "integer" }
+            }
+          },
+          "description": "List of items pre-ordered by the customer."
+        },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when the booking was created." }
+      },
+      "required": ["id", "customerName", "customerEmail", "tableNumber", "date", "time", "guests", "status", "createdAt"]
+    },
+    "Table": {
+      "title": "Table",
+      "description": "A physical table in the restaurant.",
+      "type": "object",
+      "properties": {
+        "number": { "type": "integer", "description": "The table number." },
+        "capacity": { "type": "integer", "description": "The maximum number of guests the table can accommodate." },
+        "status": { "type": "string", "enum": ["Available", "Reserved", "Occupied"], "description": "Current status of the table." }
+      },
+      "required": ["number", "capacity", "status"]
+    },
+    "Feedback": {
+      "title": "Feedback",
+      "description": "Customer review and rating.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "customerName": { "type": "string" },
+        "rating": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "comment": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "uid", "customerName", "rating", "createdAt"]
+    },
+    "WaitlistEntry": {
+      "title": "WaitlistEntry",
+      "description": "An entry in the digital waitlist.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "customerName": { "type": "string" },
+        "partySize": { "type": "integer" },
+        "phoneNumber": { "type": "string" },
+        "status": { "type": "string", "enum": ["Waiting", "Notified", "Seated", "Cancelled"] },
+        "estimatedWaitTime": { "type": "integer", "description": "Estimated wait time in minutes." },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "customerName", "partySize", "status", "createdAt"]
+    },
+    "Employee": {
+      "title": "Employee",
+      "description": "A restaurant staff member.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier for the employee." },
+        "firstName": { "type": "string", "description": "First name of the employee." },
+        "lastName": { "type": "string", "description": "Last name of the employee." },
+        "name": { "type": "string", "description": "Full name of the employee." },
+        "email": { "type": "string", "description": "Email of the employee." },
+        "phone": { "type": "string", "description": "Phone number of the employee." },
+        "address": { "type": "string", "description": "Address of the employee." },
+        "employeeCode": { "type": "string", "description": "Unique 4-digit code for staff login." },
+        "designation": { "type": "string", "description": "Job title/designation." },
+        "roles": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["Admin", "Manager", "Chef", "Waiter", "Accountant"] },
+          "description": "System roles assigned to the employee."
+        },
+        "active": { "type": "boolean", "description": "Whether the employee is currently active." },
+        "createdBy": { "type": "string", "description": "Employee code of the creator." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when the employee was created." }
+      },
+      "required": ["id", "firstName", "lastName", "name", "employeeCode", "designation", "roles"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A food delivery order.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerEmail": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "address": { "type": "string" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "itemId": { "type": "string" },
+              "quantity": { "type": "integer" }
+            }
+          }
+        },
+        "total": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["Cash", "Credit Card"] },
+        "status": { "type": "string", "enum": ["Pending", "Preparing", "Out for Delivery", "Delivered", "Cancelled", "Fulfilled"] },
+        "pointsEarned": { "type": "integer", "description": "Loyalty points earned from this order." },
+        "pointsRedeemed": { "type": "integer", "description": "Loyalty points redeemed for this order." },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "customerName", "customerEmail", "phoneNumber", "address", "items", "total", "paymentMethod", "status", "createdAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Extended user information and loyalty status.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "roles": { "type": "array", "items": { "type": "string" } },
+        "loyaltyPoints": { "type": "integer", "default": 0 },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "displayName": { "type": "string" },
+        "phoneNumber": { "type": "string" }
+      },
+      "required": ["uid", "email", "roles"]
+    },
+    "LoyaltyTransaction": {
+      "title": "LoyaltyTransaction",
+      "description": "A record of points earned or redeemed.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "type": { "type": "string", "enum": ["Earned", "Redeemed"] },
+        "amount": { "type": "integer" },
+        "description": { "type": "string" },
+        "referenceId": { "type": "string", "description": "ID of the booking or order." },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "uid", "type", "amount", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/menu": {
+      "schema": "MenuItem",
+      "description": "Collection of available menu items."
+    },
+    "/bookings": {
+      "schema": "Booking",
+      "description": "Collection of all table reservations."
+    },
+    "/tables": {
+      "schema": "Table",
+      "description": "Collection of restaurant tables."
+    },
+    "/feedback": {
+      "schema": "Feedback",
+      "description": "Collection of customer feedback."
+    },
+    "/waitlist": {
+      "schema": "WaitlistEntry",
+      "description": "Collection of active waitlist entries."
+    },
+    "/employees": {
+      "schema": "Employee",
+      "description": "Collection of restaurant staff members."
+    },
+    "/orders": {
+      "schema": "Order",
+      "description": "Collection of food delivery orders."
+    },
+    "/users": {
+      "schema": "UserProfile",
+      "description": "Collection of user profiles and loyalty data."
+    },
+    "/loyaltyTransactions": {
+      "schema": "LoyaltyTransaction",
+      "description": "History of loyalty point changes."
+    }
+  }
+}
