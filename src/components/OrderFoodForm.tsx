@@ -8,6 +8,8 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import { User } from 'firebase/auth';
 import { useFirebase } from '../App';
 import { loyaltyService } from '../services/loyaltyService';
+import { sendEmail } from '../lib/emailService';
+import { getOrderEmail } from '../lib/emailTemplates';
 
 interface OrderFoodFormProps {
   menu: MenuItem[];
@@ -126,6 +128,25 @@ export const OrderFoodForm: React.FC<OrderFoodFormProps> = ({ menu, user, onClos
 
       const docRef = await addDoc(collection(db, 'orders'), orderData);
       
+      // Send order email
+      if (details.email) {
+        const emailHtml = getOrderEmail({
+          customerName: details.name,
+          items: cart.map(i => ({ 
+            name: i.item.name, 
+            quantity: i.quantity, 
+            price: i.item.price 
+          })),
+          total: total
+        });
+        
+        await sendEmail(
+          details.email,
+          `Order Received - Tampa Taste #${docRef.id.slice(0, 6).toUpperCase()}`,
+          emailHtml
+        );
+      }
+
       if (pointsToRedeem > 0 && user?.uid) {
         await loyaltyService.redeemPoints(user.uid, pointsToRedeem, docRef.id, `Redeemed for order #${docRef.id.slice(0, 6)}`);
       }
@@ -139,13 +160,12 @@ export const OrderFoodForm: React.FC<OrderFoodFormProps> = ({ menu, user, onClos
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
-      >
-        {/* Header */}
+    <motion.div
+      initial={{ opacity: 0, scale: 0.95, y: 20 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      className="bg-white rounded-3xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
+    >
+      {/* Header */}
         <div className="p-6 border-b flex items-center justify-between bg-gray-50">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-orange-100 rounded-xl flex items-center justify-center text-orange-600">
@@ -636,7 +656,6 @@ export const OrderFoodForm: React.FC<OrderFoodFormProps> = ({ menu, user, onClos
             </div>
           )}
         </AnimatePresence>
-      </motion.div>
-    </div>
+    </motion.div>
   );
 };

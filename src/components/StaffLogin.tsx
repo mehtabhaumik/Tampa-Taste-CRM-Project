@@ -32,7 +32,7 @@ import { useFirebase } from '../App';
 
 interface StaffLoginProps {
   onLoginSuccess: (roles: string[], employeeCode: string, firstName: string, lastName: string) => void;
-  onBack: () => void;
+  onBack?: () => void;
 }
 
 export default function StaffLogin({ onLoginSuccess, onBack }: StaffLoginProps) {
@@ -113,6 +113,10 @@ export default function StaffLogin({ onLoginSuccess, onBack }: StaffLoginProps) 
                 firstName: employee.firstName || '',
                 lastName: employee.lastName || ''
               }, { merge: true });
+              
+              // Add a small delay to ensure Firestore propagation before navigating
+              // This helps prevent "Missing or insufficient permissions" errors on the dashboard
+              await new Promise(resolve => setTimeout(resolve, 2000));
             } catch (userErr: any) {
               handleFirestoreError(userErr, OperationType.WRITE, `users/${currentUser.uid}`);
               throw userErr;
@@ -135,89 +139,59 @@ export default function StaffLogin({ onLoginSuccess, onBack }: StaffLoginProps) 
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center relative overflow-hidden bg-slate-50">
-      {/* Background Image with Overlay */}
-      <div className="absolute inset-0 z-0">
-        <img 
-          src="https://images.unsplash.com/photo-1552566626-52f8b828add9?auto=format&fit=crop&q=80&w=2070" 
-          className="w-full h-full object-cover"
-          alt="Restaurant Background"
-          referrerPolicy="no-referrer"
-        />
-        <div className="absolute inset-0 bg-brand-900/80 backdrop-blur-[2px]" />
-      </div>
+    <div className="w-full">
+      <div className="relative z-10">
+        {error && (
+          <motion.div 
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="mb-6 p-4 bg-red-50 text-red-600 rounded-2xl flex items-center gap-3 text-sm font-medium"
+          >
+            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            {error}
+          </motion.div>
+        )}
 
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="relative z-10 w-full max-w-md px-6"
-      >
-        <div className="glass p-10 rounded-[3rem] shadow-2xl border border-white/20 relative overflow-hidden">
-          {/* Decorative Background */}
-          <div className="absolute top-0 right-0 w-32 h-32 bg-brand-50 rounded-full -mr-16 -mt-16 opacity-50" />
-          
-          <div className="relative z-10">
-            <div className="flex items-center gap-4 mb-10">
-              <div className="w-16 h-16 bg-brand-900 text-white rounded-3xl flex items-center justify-center shadow-xl shadow-brand-900/20">
-                <ShieldCheck className="w-8 h-8" />
-              </div>
-              <div>
-                <h2 className="text-3xl font-bold tracking-tight text-brand-900 font-serif">Staff Portal</h2>
-                <p className="text-xs font-bold uppercase tracking-widest text-brand-600">Secure Access</p>
-              </div>
-            </div>
-
-          {error && (
-            <motion.div 
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="mb-6 p-4 bg-red-50 text-red-600 rounded-2xl flex items-center gap-3 text-sm font-medium"
-            >
-              <AlertCircle className="w-5 h-5 flex-shrink-0" />
-              {error}
-            </motion.div>
-          )}
-
-          <div className="space-y-6">
-            <div className="p-4 bg-brand-50 rounded-2xl border border-brand-100">
-              <p className="text-xs text-brand-900 font-medium leading-relaxed">
-                Please enter your unique 4-digit employee code to access the staff dashboard.
-              </p>
-            </div>
-
-            <form onSubmit={handleCodeLogin} className="space-y-4">
-              <div className="relative">
-                <Key className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300" />
-                <input
-                  type="password"
-                  required
-                  placeholder="Enter Employee Code"
-                  value={employeeCode}
-                  onChange={(e) => setEmployeeCode(e.target.value)}
-                  className="w-full p-5 pl-14 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-brand-500 text-lg font-medium tracking-widest text-center"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full p-5 bg-brand-900 text-white rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-brand-800 transition-all disabled:opacity-50 shadow-xl shadow-brand-900/20"
-              >
-                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
-                  <>Login to Dashboard <ChevronRight className="w-4 h-4" /></>
-                )}
-              </button>
-            </form>
+        <div className="space-y-6">
+          <div className="p-4 bg-brand-50 rounded-2xl border border-brand-100">
+            <p className="text-xs text-brand-900 font-medium leading-relaxed">
+              Please enter your unique 4-digit employee code to access the staff dashboard.
+            </p>
           </div>
 
+          <form onSubmit={handleCodeLogin} className="space-y-4">
+            <div className="relative">
+              <Key className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300" />
+              <input
+                type="password"
+                required
+                placeholder="Enter Employee Code"
+                value={employeeCode}
+                onChange={(e) => setEmployeeCode(e.target.value)}
+                className="w-full p-5 pl-14 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-brand-500 text-lg font-medium tracking-widest text-center"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full p-5 bg-brand-900 text-white rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-brand-800 transition-all disabled:opacity-50 shadow-xl shadow-brand-900/20"
+            >
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
+                <>Login to Dashboard <ChevronRight className="w-4 h-4" /></>
+              )}
+            </button>
+          </form>
+        </div>
+
+        {onBack && (
           <button
             onClick={onBack}
             className="mt-8 w-full text-xs font-bold text-slate-400 uppercase tracking-widest hover:text-slate-600 transition-colors"
           >
-            ← Back to Home
+            ← Back
           </button>
-        </div>
+        )}
       </div>
-    </motion.div>
-  </div>
-);
+    </div>
+  );
 }

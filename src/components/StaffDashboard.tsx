@@ -21,7 +21,8 @@ import {
   Loader2,
   Hash,
   Pencil,
-  ShoppingBag
+  ShoppingBag,
+  Globe
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -38,7 +39,9 @@ import {
   Pie
 } from 'recharts';
 import { Booking, MenuItem, Feedback, WaitlistEntry, UserProfile, Employee, UserRole, Order, LoyaltyTransaction } from '../types';
+import { User } from 'firebase/auth';
 import BookingForm from './BookingForm';
+import CustomerWebsite from './CustomerWebsite';
 import { INITIAL_MENU } from '../constants';
 import { cn, formatCurrency } from '../utils';
 import { db, handleFirestoreError, OperationType } from '../firebase';
@@ -62,7 +65,25 @@ interface StaffDashboardProps {
   onUpdateOrder: (order: Order) => void;
   onCancelOrder: (id: string) => void;
   loyaltyTransactions: LoyaltyTransaction[];
+  user: User | null;
 }
+
+// Helper to safely parse dates from various formats (JS Date, Firestore Timestamp, string, number)
+const parseDate = (val: any): Date | null => {
+  if (!val) return null;
+  try {
+    if (val instanceof Date) return val;
+    if (typeof val.toDate === 'function') return val.toDate();
+    if (val && typeof val === 'object' && 'seconds' in val) {
+      const d = new Date(val.seconds * 1000);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? null : d;
+  } catch (e) {
+    return null;
+  }
+};
 
 export default function StaffDashboard({ 
   bookings, 
@@ -81,9 +102,10 @@ export default function StaffDashboard({
   orders,
   onUpdateOrder,
   onCancelOrder,
-  loyaltyTransactions
+  loyaltyTransactions,
+  user
 }: StaffDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'overview' | 'bookings' | 'menu' | 'waitlist' | 'feedback' | 'staff' | 'orders' | 'loyalty'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'bookings' | 'menu' | 'waitlist' | 'feedback' | 'staff' | 'orders' | 'loyalty' | 'customer-portal'>('overview');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedOrderDate, setSelectedOrderDate] = useState(new Date().toISOString().split('T')[0]);
@@ -92,17 +114,24 @@ export default function StaffDashboard({
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [trendDays, setTrendDays] = useState(7);
 
-  const isAdminOrManager = profile?.roles?.some(r => ['Admin', 'Manager', 'Accountant'].includes(r));
-  const isAdmin = profile?.roles?.includes('Admin');
+  const isSuperAdmin = profile?.roles?.includes('Super Admin') || profile?.employeeCode === '1111';
+  const isAdmin = profile?.roles?.includes('Admin') || isSuperAdmin;
+  const isAdminOrManager = profile?.roles?.some(r => ['Admin', 'Manager', 'Accountant', 'Super Admin'].includes(r)) || profile?.employeeCode === '1111';
   
   // Find current employee details from the employees list to keep sidebar in sync
   const currentEmployee = useMemo(() => {
     if (!profile?.employeeCode) return null;
-    return employees.find(e => e.employeeCode === profile.employeeCode);
+    const emp = employees.find(e => e.employeeCode === profile.employeeCode);
+    if (profile.employeeCode === '1111' && emp && !emp.roles.includes('Super Admin')) {
+      // Ensure 1111 has Super Admin role in the list too
+      return { ...emp, roles: [...new Set([...emp.roles, 'Super Admin' as UserRole])] };
+    }
+    return emp;
   }, [employees, profile?.employeeCode]);
 
-  const canManageBookings = profile?.roles?.some(r => ['Admin', 'Manager', 'Accountant'].includes(r));
-  const canManageWaitlist = profile?.roles?.some(r => ['Admin', 'Manager', 'Accountant'].includes(r));
+  const canAddEmployee = isSuperAdmin || profile?.roles?.some(r => ['Admin', 'Manager'].includes(r));
+  const canManageBookings = isAdminOrManager;
+  const canManageWaitlist = isAdminOrManager;
 
   // Employee Form State
   const [showEmployeeForm, setShowEmployeeForm] = useState(false);
@@ -110,6 +139,19 @@ export default function StaffDashboard({
   const [showWaitlistForm, setShowWaitlistForm] = useState(false);
   const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+
+  const handleBookingComplete = async (booking: Booking) => {
+    if (editingBooking) {
+      await onUpdateBooking(booking);
+    } else {
+      await onAddBooking?.(booking);
+    }
+  };
+
+  const handleBookingCancel = () => {
+    setShowBookingForm(false);
+    setEditingBooking(null);
+  };
   const [showOrderDeleteConfirm, setShowOrderDeleteConfirm] = useState<string | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [newWaitlistEntry, setNewWaitlistEntry] = useState({
@@ -142,16 +184,84 @@ export default function StaffDashboard({
     available: true
   });
 
+  const handleCloseEmployeeForm = () => {
+    setShowEmployeeForm(false);
+    setEditingEmployee(null);
+    setAdminCode('');
+    setNewEmployee({
+      firstName: '',
+      lastName: '',
+      email: '',
+      phone: '',
+      address: '',
+      designation: '',
+      roles: [] as UserRole[],
+      active: true
+    });
+  };
+
+  const handleOpenEmployeeForm = (emp: Employee | null = null) => {
+    setAdminCode('');
+    if (emp) {
+      setEditingEmployee(emp);
+      setNewEmployee({
+        firstName: emp.firstName || '',
+        lastName: emp.lastName || '',
+        email: emp.email || '',
+        phone: emp.phone || '',
+        address: emp.address || '',
+        designation: emp.designation || '',
+        roles: emp.roles || [],
+        active: emp.active !== false
+      });
+    } else {
+      setEditingEmployee(null);
+      setNewEmployee({
+        firstName: '',
+        lastName: '',
+        email: '',
+        phone: '',
+        address: '',
+        designation: '',
+        roles: [] as UserRole[],
+        active: true
+      });
+    }
+    setShowEmployeeForm(true);
+  };
+
   const handleCreateEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isAdminOrManager) return;
-
-    // Check for special code if updating an Admin
-    const isEditingAdmin = editingEmployee?.roles.includes('Admin');
-    const isSettingAdmin = newEmployee.roles.includes('Admin');
     
-    if ((isEditingAdmin || isSettingAdmin) && adminCode !== '9999') {
-      alert('Special Admin Code "9999" is required to create or update an Admin role employee.');
+    // Authorization check
+    if (editingEmployee) {
+      const isTargetSuperAdmin = editingEmployee.roles.includes('Super Admin') || editingEmployee.employeeCode === '1111';
+      if (!isSuperAdmin && isTargetSuperAdmin) {
+        alert('Only a Super Admin can update another Super Admin.');
+        return;
+      }
+      if (!isAdmin && !isSuperAdmin) {
+        alert('You do not have permission to update employees.');
+        return;
+      }
+    } else {
+      if (!canAddEmployee) {
+        alert('You do not have permission to add new employees.');
+        return;
+      }
+    }
+
+    // Check for special code for ALL updates or if setting privileged roles
+    const isSettingPrivileged = newEmployee.roles.some(r => ['Super Admin', 'Admin'].includes(r));
+    
+    if ((editingEmployee || isSettingPrivileged) && adminCode !== '9999') {
+      alert('Security Code "9999" is required for all employee updates and for assigning Admin/Super Admin roles.');
+      return;
+    }
+
+    // Mutually exclusive roles check
+    if (newEmployee.roles.includes('Super Admin') && newEmployee.roles.includes('Admin')) {
+      alert('An employee cannot have both "Super Admin" and "Admin" roles simultaneously.');
       return;
     }
 
@@ -202,19 +312,7 @@ export default function StaffDashboard({
         alert(`Employee created successfully! Employee Code: ${code}`);
       }
       
-      setShowEmployeeForm(false);
-      setEditingEmployee(null);
-      setAdminCode('');
-      setNewEmployee({
-        firstName: '',
-        lastName: '',
-        email: '',
-        phone: '',
-        address: '',
-        designation: '',
-        roles: [] as UserRole[],
-        active: true
-      });
+      handleCloseEmployeeForm();
     } catch (error) {
       handleFirestoreError(error, editingEmployee ? OperationType.UPDATE : OperationType.CREATE, 'employees');
     } finally {
@@ -302,14 +400,19 @@ export default function StaffDashboard({
       { id: 'menu', label: 'Menu Management', tab: 'menu' },
       { id: 'feedback', label: 'Customer Feedback', tab: 'feedback' },
       { id: 'loyalty', label: 'Loyalty Program', tab: 'loyalty' },
+      { id: 'customer-portal', label: 'Customer Portal', tab: 'customer-portal' },
       ...(isAdminOrManager ? [{ id: 'staff', label: 'Staff Management', tab: 'staff' }] : []),
     ];
     return sections.filter(s => s.label.toLowerCase().includes(searchQuery.toLowerCase()));
   }, [searchQuery, isAdminOrManager]);
 
   const isPast = (date: string, time: string) => {
+    if (!date || !time) return false;
     const now = new Date();
-    const bookingDate = new Date(`${date}T${time}`);
+    // Ensure time has seconds for better compatibility
+    const timeStr = time.length === 5 ? `${time}:00` : time;
+    const bookingDate = new Date(`${date}T${timeStr}`);
+    if (isNaN(bookingDate.getTime())) return false;
     return bookingDate < now;
   };
 
@@ -319,27 +422,26 @@ export default function StaffDashboard({
                            b.customerEmail.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesDate = b.date === selectedDate;
       return matchesSearch && matchesDate;
-    }).sort((a, b) => b.createdAt?.toMillis?.() - a.createdAt?.toMillis?.());
+    }).sort((a, b) => (parseDate(b.createdAt)?.getTime() || 0) - (parseDate(a.createdAt)?.getTime() || 0));
   }, [bookings, searchQuery, selectedDate]);
 
   const filteredOrders = useMemo(() => {
     return orders.filter(o => {
       const matchesSearch = o.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
                            o.id.toLowerCase().includes(searchQuery.toLowerCase());
-      const orderDate = o.createdAt?.toDate?.()?.toISOString()?.split('T')[0] || 
-                        new Date(o.createdAt?.seconds * 1000).toISOString().split('T')[0];
+      const orderDate = parseDate(o.createdAt)?.toISOString()?.split('T')[0] || '';
       const matchesDate = orderDate === selectedOrderDate;
       return matchesSearch && matchesDate;
-    }).sort((a, b) => b.createdAt?.toMillis?.() - a.createdAt?.toMillis?.());
+    }).sort((a, b) => (parseDate(b.createdAt)?.getTime() || 0) - (parseDate(a.createdAt)?.getTime() || 0));
   }, [orders, searchQuery, selectedOrderDate]);
 
   const filteredWaitlist = useMemo(() => {
     return waitlist.filter(w => {
       const matchesSearch = w.customerName.toLowerCase().includes(searchQuery.toLowerCase());
-      const entryDate = new Date(w.createdAt).toISOString().split('T')[0];
+      const entryDate = parseDate(w.createdAt)?.toISOString()?.split('T')[0] || '';
       const matchesDate = entryDate === selectedWaitlistDate;
       return matchesSearch && matchesDate;
-    }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    }).sort((a, b) => (parseDate(b.createdAt)?.getTime() || 0) - (parseDate(a.createdAt)?.getTime() || 0));
   }, [waitlist, searchQuery, selectedWaitlistDate]);
 
   return (
@@ -376,6 +478,7 @@ export default function StaffDashboard({
             { id: 'menu', icon: Utensils, label: 'Menu Manager' },
             { id: 'feedback', icon: MessageSquare, label: 'Feedback' },
             { id: 'loyalty', icon: Star, label: 'Loyalty Program' },
+            { id: 'customer-portal', icon: Globe, label: 'Customer Portal' },
             ...(isAdminOrManager ? [{ id: 'staff', icon: Users, label: 'Staff Management' }] : []),
           ].map((item) => (
             <button
@@ -472,6 +575,32 @@ export default function StaffDashboard({
         </header>
 
         <AnimatePresence mode="wait">
+          {activeTab === 'customer-portal' && (
+            <motion.div
+              key="customer-portal"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="h-full -m-4 sm:-m-6 lg:-m-8 bg-white overflow-hidden rounded-none lg:rounded-[2.5rem] shadow-2xl border border-black/5 relative"
+            >
+              <button 
+                onClick={() => window.open(`${window.location.origin}${window.location.pathname}?view=customer-portal`, '_blank')}
+                className="absolute top-6 right-6 z-10 p-3 bg-white/80 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg hover:bg-white transition-all flex items-center gap-2 text-sm font-bold text-brand-900"
+              >
+                <Globe className="w-4 h-4" />
+                Open in New Tab
+              </button>
+              <div className="h-full overflow-y-auto custom-scrollbar">
+                <CustomerWebsite 
+                  menu={menu} 
+                  onBookingComplete={onAddBooking || (() => {})} 
+                  isAdmin={isAdmin}
+                  user={user}
+                />
+              </div>
+            </motion.div>
+          )}
+
           {activeTab === 'overview' && (
             <motion.div
               key="overview"
@@ -634,30 +763,34 @@ export default function StaffDashboard({
                                 <>
                                   {booking.status === 'Confirmed' && (
                                     <button 
-                                      onClick={() => onUpdateBooking({ ...booking, status: 'Completed' })}
+                                      onClick={() => onUpdateBooking({ ...booking, status: 'Fulfilled' })}
                                       className="p-2 hover:bg-emerald-50 text-emerald-600 rounded-xl transition-all"
-                                      title="Mark as Completed"
+                                      title="Mark as Fulfilled"
                                     >
                                       <CheckCircle2 className="w-4 h-4" />
                                     </button>
                                   )}
-                                  <button 
-                                    onClick={() => {
-                                      setEditingBooking(booking);
-                                      setShowBookingForm(true);
-                                    }}
-                                    className="p-2 hover:bg-blue-50 text-blue-600 rounded-xl transition-all"
-                                    title="Update Booking"
-                                  >
-                                    <Pencil className="w-4 h-4" />
-                                  </button>
-                                  <button 
-                                    onClick={() => setShowDeleteConfirm(booking.id)}
-                                    className="p-2 hover:bg-red-50 text-red-600 rounded-xl transition-all"
-                                    title="Cancel Booking"
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
+                                  {!isPast(booking.date, booking.time) && (
+                                    <>
+                                      <button 
+                                        onClick={() => {
+                                          setEditingBooking(booking);
+                                          setShowBookingForm(true);
+                                        }}
+                                        className="p-2 hover:bg-blue-50 text-blue-600 rounded-xl transition-all"
+                                        title="Update Booking"
+                                      >
+                                        <Pencil className="w-4 h-4" />
+                                      </button>
+                                      <button 
+                                        onClick={() => setShowDeleteConfirm(booking.id)}
+                                        className="p-2 hover:bg-red-50 text-red-600 rounded-xl transition-all"
+                                        title="Cancel Booking"
+                                      >
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    </>
+                                  )}
                                 </>
                               )}
                             </div>
@@ -751,7 +884,7 @@ export default function StaffDashboard({
                           <div className="flex justify-end gap-2">
                             {order.status !== 'Cancelled' && order.status !== 'Fulfilled' && (
                               <>
-                                {new Date(order.createdAt).toDateString() === new Date().toDateString() ? (
+                                {parseDate(order.createdAt)?.toDateString() === new Date().toDateString() ? (
                                   <>
                                     {order.status === 'Pending' && (
                                       <button 
@@ -905,23 +1038,27 @@ export default function StaffDashboard({
                                     <CheckCircle2 className="w-4 h-4" />
                                   </button>
                                 )}
-                                <button 
-                                  onClick={() => {
-                                    setEditingBooking(booking);
-                                    setShowBookingForm(true);
-                                  }}
-                                  className="p-2 hover:bg-blue-50 text-blue-600 rounded-xl transition-all"
-                                  title="Update Booking"
-                                >
-                                  <Pencil className="w-4 h-4" />
-                                </button>
-                                <button 
-                                  onClick={() => onCancelBooking(booking.id)}
-                                  className="p-2 hover:bg-red-50 text-red-600 rounded-xl transition-all"
-                                  title="Cancel Booking"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
+                                {!isPast(booking.date, booking.time) && (
+                                  <>
+                                    <button 
+                                      onClick={() => {
+                                        setEditingBooking(booking);
+                                        setShowBookingForm(true);
+                                      }}
+                                      className="p-2 hover:bg-blue-50 text-blue-600 rounded-xl transition-all"
+                                      title="Update Booking"
+                                    >
+                                      <Pencil className="w-4 h-4" />
+                                    </button>
+                                    <button 
+                                      onClick={() => onCancelBooking(booking.id)}
+                                      className="p-2 hover:bg-red-50 text-red-600 rounded-xl transition-all"
+                                      title="Cancel Booking"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </>
+                                )}
                               </>
                             )}
                           </div>
@@ -1088,7 +1225,7 @@ export default function StaffDashboard({
                       <tr key={entry.id} className="hover:bg-black/[0.01] transition-all">
                         <td className="px-6 py-4">
                           <p className="text-sm font-bold">{entry.customerName}</p>
-                          <p className="text-[10px] text-black/40">Joined {new Date(entry.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                          <p className="text-[10px] text-black/40">Joined {parseDate(entry.createdAt)?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) || 'N/A'}</p>
                         </td>
                         <td className="px-6 py-4 text-xs font-bold">{entry.partySize} Guests</td>
                         <td className="px-6 py-4 text-xs font-medium">{entry.phoneNumber || 'N/A'}</td>
@@ -1208,7 +1345,7 @@ export default function StaffDashboard({
                           <div>
                             <p className="font-bold">{f.customerName}</p>
                             <p className="text-[10px] text-black/40 uppercase tracking-widest font-bold">
-                              {new Date(f.createdAt).toLocaleDateString()}
+                              {parseDate(f.createdAt)?.toLocaleDateString() || 'N/A'}
                             </p>
                           </div>
                         </div>
@@ -1272,7 +1409,7 @@ export default function StaffDashboard({
                             </td>
                             <td className="px-6 py-4 text-xs text-slate-500">{tx.description}</td>
                             <td className="px-6 py-4 text-xs text-slate-400">
-                              {new Date(tx.createdAt).toLocaleString()}
+                              {parseDate(tx.createdAt)?.toLocaleString() || 'N/A'}
                             </td>
                           </tr>
                         ))}
@@ -1314,7 +1451,7 @@ export default function StaffDashboard({
                 <div className="p-6 border-b border-black/5 flex justify-between items-center">
                   <h3 className="font-bold text-lg">Staff Directory</h3>
                   <button 
-                    onClick={() => setShowEmployeeForm(true)}
+                    onClick={() => handleOpenEmployeeForm()}
                     className="px-4 py-2 bg-black text-white rounded-xl text-xs font-bold flex items-center gap-2"
                   >
                     <Plus className="w-4 h-4" /> Add Employee
@@ -1371,29 +1508,23 @@ export default function StaffDashboard({
                             </span>
                           </td>
                           <td className="px-6 py-4 text-xs text-black/40">#{emp.createdBy || 'N/A'}</td>
-                          <td className="px-6 py-4 text-right">
-                            {((!emp.roles.includes('Admin') || isAdmin) && 
-                              !(profile?.roles?.some(r => ['Manager', 'Accountant'].includes(r)) && emp.employeeCode === profile.employeeCode)) && (
-                              <button 
-                                onClick={() => {
-                                  setEditingEmployee(emp);
-                                  setNewEmployee({
-                                    firstName: emp.firstName || '',
-                                    lastName: emp.lastName || '',
-                                    email: emp.email || '',
-                                    phone: emp.phone || '',
-                                    address: emp.address || '',
-                                    designation: emp.designation || '',
-                                    roles: emp.roles || [],
-                                    active: emp.active !== false
-                                  });
-                                  setShowEmployeeForm(true);
-                                }}
-                                className="p-2 hover:bg-slate-100 rounded-xl transition-all text-slate-400"
-                              >
-                                <ChevronRight className="w-4 h-4" />
-                              </button>
-                            )}
+                  <td className="px-6 py-4 text-right">
+                            {(() => {
+                              const isTargetSuperAdmin = emp.roles.includes('Super Admin') || emp.employeeCode === '1111';
+                              const canEdit = isSuperAdmin || (isAdmin && !isTargetSuperAdmin);
+                              
+                              if (!canEdit) return null;
+                              if (profile?.roles?.some(r => ['Manager', 'Accountant'].includes(r)) && emp.employeeCode === profile.employeeCode && !isSuperAdmin) return null;
+
+                              return (
+                                <button 
+                                  onClick={() => handleOpenEmployeeForm(emp)}
+                                  className="p-2 hover:bg-slate-100 rounded-xl transition-all text-slate-400"
+                                >
+                                  <ChevronRight className="w-4 h-4" />
+                                </button>
+                              );
+                            })()}
                           </td>
                         </tr>
                       ))}
@@ -1608,7 +1739,7 @@ export default function StaffDashboard({
                 className="w-full max-w-2xl bg-white rounded-[2.5rem] p-8 shadow-2xl relative overflow-hidden max-h-[90vh] overflow-y-auto custom-scrollbar"
               >
                 <button 
-                  onClick={() => setShowEmployeeForm(false)}
+                  onClick={handleCloseEmployeeForm}
                   className="absolute top-6 right-6 p-2 hover:bg-slate-100 rounded-full transition-all text-slate-400"
                 >
                   <XCircle className="w-6 h-6" />
@@ -1677,35 +1808,54 @@ export default function StaffDashboard({
                   <div>
                     <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Roles</label>
                     <div className="flex flex-wrap gap-2">
-                      {['Admin', 'Manager', 'Chef', 'Waiter', 'Accountant'].map(role => (
-                        <button
-                          key={role}
-                          type="button"
-                          onClick={() => {
-                            const roles = newEmployee.roles.includes(role as UserRole)
-                              ? newEmployee.roles.filter(r => r !== role)
-                              : [...newEmployee.roles, role as UserRole];
-                            setNewEmployee({...newEmployee, roles});
-                          }}
-                          className={cn(
-                            "px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all",
-                            newEmployee.roles.includes(role as UserRole)
-                              ? "bg-black text-white"
-                              : "bg-slate-100 text-slate-400 hover:bg-slate-200"
-                          )}
-                        >
-                          {role}
-                        </button>
-                      ))}
+                      {['Super Admin', 'Admin', 'Manager', 'Chef', 'Waiter', 'Accountant'].map(role => {
+                        const isSuperAdminRole = role === 'Super Admin';
+                        const isAdminRole = role === 'Admin';
+                        
+                        // Disable Super Admin option if not Super Admin
+                        const isDisabled = isSuperAdminRole && !isSuperAdmin;
+                        
+                        return (
+                          <button
+                            key={role}
+                            type="button"
+                            disabled={isDisabled}
+                            onClick={() => {
+                              let roles = [...newEmployee.roles];
+                              if (roles.includes(role as UserRole)) {
+                                roles = roles.filter(r => r !== role);
+                              } else {
+                                // Mutually exclusive check
+                                if (isSuperAdminRole) {
+                                  roles = roles.filter(r => r !== 'Admin');
+                                } else if (isAdminRole) {
+                                  roles = roles.filter(r => r !== 'Super Admin');
+                                }
+                                roles.push(role as UserRole);
+                              }
+                              setNewEmployee({...newEmployee, roles});
+                            }}
+                            className={cn(
+                              "px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all",
+                              newEmployee.roles.includes(role as UserRole)
+                                ? "bg-black text-white"
+                                : "bg-slate-100 text-slate-400 hover:bg-slate-200",
+                              isDisabled && "opacity-30 cursor-not-allowed"
+                            )}
+                          >
+                            {role}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
-                  {(newEmployee.roles.includes('Admin') || editingEmployee?.roles.includes('Admin')) && (
+                  {(editingEmployee || newEmployee.roles.some(r => ['Super Admin', 'Admin'].includes(r))) && (
                     <div className="md:col-span-2">
                       <label className={cn(
                         "block text-[10px] font-bold uppercase tracking-widest mb-2 transition-colors",
                         adminCode === '9999' ? "text-emerald-500" : "text-red-500"
                       )}>
-                        {adminCode === '9999' ? 'Admin Security Code Verified' : 'Admin Security Code Required'}
+                        {adminCode === '9999' ? 'Security Code Verified' : 'Security Code Required'}
                       </label>
                       <input
                         type="password"
@@ -1754,7 +1904,9 @@ export default function StaffDashboard({
                       disabled={
                         formLoading || 
                         newEmployee.roles.length === 0 || 
-                        ((newEmployee.roles.includes('Admin') || editingEmployee?.roles.includes('Admin')) && adminCode !== '9999')
+                        (editingEmployee 
+                          ? adminCode !== '9999' 
+                          : (newEmployee.roles.some(r => ['Admin', 'Super Admin'].includes(r)) && adminCode !== '9999'))
                       }
                       className="w-full p-4 bg-black text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-slate-800 transition-all disabled:opacity-50"
                     >
@@ -1800,19 +1952,8 @@ export default function StaffDashboard({
                 <BookingForm 
                   initialData={editingBooking || undefined}
                   isEditing={!!editingBooking}
-                  onBookingComplete={(booking) => {
-                    if (editingBooking) {
-                      onUpdateBooking(booking);
-                    } else {
-                      onAddBooking?.(booking);
-                    }
-                    setShowBookingForm(false);
-                    setEditingBooking(null);
-                  }}
-                  onCancel={() => {
-                    setShowBookingForm(false);
-                    setEditingBooking(null);
-                  }}
+                  onBookingComplete={handleBookingComplete}
+                  onCancel={handleBookingCancel}
                 />
               </motion.div>
             </motion.div>

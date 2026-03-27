@@ -1,12 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Calendar, Users, Clock, Utensils, Table as TableIcon, CheckCircle2, ChevronRight, Star } from 'lucide-react';
+import { Calendar, Users, Clock, Utensils, Table as TableIcon, CheckCircle2, ChevronRight, Star, Loader2 } from 'lucide-react';
 import { Booking, MenuItem } from '../types';
 import { TABLES } from '../constants';
 import { cn, formatCurrency } from '../utils';
 import { useFirebase } from '../App';
 import { useLanguage } from './LanguageContext';
 import { loyaltyService } from '../services/loyaltyService';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../firebase';
 
 interface BookingFormProps {
   onBookingComplete: (booking: Booking) => void;
@@ -20,6 +22,9 @@ export default function BookingForm({ onBookingComplete, onCancel, initialData, 
   const { t } = useLanguage();
   const [step, setStep] = useState(1);
   const [pointsToRedeem, setPointsToRedeem] = useState(initialData?.pointsRedeemed || 0);
+  const [bookedTables, setBookedTables] = useState<number[]>([]);
+  const [loadingTables, setLoadingTables] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
   const [generatedId] = useState(() => initialData?.id || (() => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let result = '';
@@ -39,7 +44,35 @@ export default function BookingForm({ onBookingComplete, onCancel, initialData, 
     orderedItems: initialData?.orderedItems || [] as { itemId: string; quantity: number }[]
   });
 
-  const handleNext = () => setStep(s => s + 1);
+  const fetchAvailability = async () => {
+    if (!formData.date || !formData.time) return;
+    setLoadingTables(true);
+    try {
+      const q = query(
+        collection(db, 'bookings'),
+        where('date', '==', formData.date),
+        where('time', '==', formData.time),
+        where('status', '==', 'Confirmed')
+      );
+      const snapshot = await getDocs(q);
+      const booked = snapshot.docs
+        .map(doc => doc.data() as Booking)
+        .filter(b => b.id !== initialData?.id) // Don't count current booking if editing
+        .map(b => b.tableNumber);
+      setBookedTables(booked);
+    } catch (err) {
+      console.error('Error fetching availability:', err);
+    } finally {
+      setLoadingTables(false);
+    }
+  };
+
+  const handleNext = async () => {
+    if (step === 1) {
+      await fetchAvailability();
+    }
+    setStep(s => s + 1);
+  };
   const handleBack = () => setStep(s => s - 1);
 
   const toggleMenuItem = (itemId: string) => {
@@ -59,24 +92,34 @@ export default function BookingForm({ onBookingComplete, onCancel, initialData, 
     });
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const newBooking: Booking = {
-      id: generatedId,
-      uid: initialData?.uid || user?.uid || 'guest',
-      customerName: formData.name,
-      customerEmail: formData.email,
-      phoneNumber: formData.phoneNumber,
-      tableNumber: formData.tableNumber,
-      date: formData.date,
-      time: formData.time,
-      guests: formData.guests,
-      status: initialData?.status || 'Confirmed',
-      orderedItems: formData.orderedItems,
-      pointsRedeemed: pointsToRedeem,
-      createdAt: initialData?.createdAt || new Date().toISOString()
-    };
-    onBookingComplete(newBooking);
+    setLoadingTables(true); // Reuse loading state for submission
+    try {
+      const newBooking: Booking = {
+        ...initialData,
+        id: generatedId,
+        uid: initialData?.uid || user?.uid || 'guest',
+        customerName: formData.name,
+        customerEmail: formData.email,
+        phoneNumber: formData.phoneNumber,
+        tableNumber: formData.tableNumber,
+        date: formData.date,
+        time: formData.time,
+        guests: formData.guests,
+        status: initialData?.status || 'Confirmed',
+        orderedItems: formData.orderedItems,
+        pointsRedeemed: pointsToRedeem,
+        createdAt: initialData?.createdAt || new Date().toISOString()
+      };
+      await onBookingComplete(newBooking);
+      setIsSuccess(true);
+    } catch (err) {
+      console.error('Error submitting booking:', err);
+      // You might want to show an error message here
+    } finally {
+      setLoadingTables(false);
+    }
   };
 
   const subtotal = formData.orderedItems.reduce((acc, item) => {
@@ -87,6 +130,46 @@ export default function BookingForm({ onBookingComplete, onCancel, initialData, 
   const availablePoints = profile?.loyaltyPoints || 0;
   const maxRedeemable = Math.min(availablePoints, Math.floor(subtotal));
   const totalPrice = Math.max(0, subtotal - pointsToRedeem);
+
+  if (isSuccess) {
+    return (
+      <div className="max-w-2xl mx-auto p-6 sm:p-10 bg-white rounded-[2rem] sm:rounded-[3rem] shadow-2xl border border-slate-100 text-center">
+        <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
+          <CheckCircle2 className="w-10 h-10 text-green-600" />
+        </div>
+        <h2 className="text-3xl font-bold text-brand-900 mb-4">
+          {isEditing ? 'Reservation Updated!' : 'Reservation Confirmed!'}
+        </h2>
+        <p className="text-slate-600 mb-8">
+          {isEditing 
+            ? `Your changes for reservation #${generatedId} have been saved.`
+            : `Thank you for choosing Tampa Taste. Your reservation #${generatedId} is confirmed.`}
+          <br />
+          A confirmation email has been sent to {formData.email}.
+        </p>
+        <div className="bg-slate-50 p-6 rounded-2xl mb-8 text-left space-y-2">
+          <div className="flex justify-between">
+            <span className="text-slate-400 font-bold text-xs uppercase tracking-widest">Date & Time</span>
+            <span className="font-bold text-brand-900">{formData.date} at {formData.time}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-400 font-bold text-xs uppercase tracking-widest">Table</span>
+            <span className="font-bold text-brand-900">Table {formData.tableNumber}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-400 font-bold text-xs uppercase tracking-widest">Guests</span>
+            <span className="font-bold text-brand-900">{formData.guests} Guests</span>
+          </div>
+        </div>
+        <button
+          onClick={onCancel}
+          className="w-full p-5 bg-brand-900 text-white rounded-2xl font-bold hover:bg-brand-800 transition-all shadow-xl shadow-brand-900/20"
+        >
+          Return to Home
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-2xl mx-auto p-6 sm:p-10 bg-white rounded-[2rem] sm:rounded-[3rem] shadow-2xl border border-slate-100 relative overflow-hidden">
@@ -247,23 +330,38 @@ export default function BookingForm({ onBookingComplete, onCancel, initialData, 
             </div>
             
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 py-4">
-              {TABLES.map((table) => (
-                <button
-                  key={table.number}
-                  type="button"
-                  onClick={() => setFormData({ ...formData, tableNumber: table.number })}
-                  className={cn(
-                    "aspect-square rounded-2xl border-2 flex flex-col items-center justify-center transition-all",
-                    formData.tableNumber === table.number
-                      ? "border-brand-900 bg-brand-900 text-white shadow-xl scale-105"
-                      : "border-slate-100 bg-slate-50 text-slate-400 hover:border-brand-200"
-                  )}
-                >
-                  <TableIcon className="w-6 h-6 mb-1" />
-                  <span className="text-xs font-bold">T-{table.number}</span>
-                  <span className="text-[10px] opacity-60">{table.capacity} seats</span>
-                </button>
-              ))}
+              {loadingTables ? (
+                <div className="col-span-full flex flex-col items-center justify-center py-12 text-slate-400">
+                  <Loader2 className="w-8 h-8 animate-spin mb-2" />
+                  <p className="text-sm">Checking availability...</p>
+                </div>
+              ) : (
+                TABLES.map((table) => {
+                  const isBooked = bookedTables.includes(table.number);
+                  return (
+                    <button
+                      key={table.number}
+                      type="button"
+                      disabled={isBooked}
+                      onClick={() => setFormData({ ...formData, tableNumber: table.number })}
+                      className={cn(
+                        "aspect-square rounded-2xl border-2 flex flex-col items-center justify-center transition-all relative",
+                        formData.tableNumber === table.number
+                          ? "border-brand-900 bg-brand-900 text-white shadow-xl scale-105"
+                          : "border-slate-100 bg-slate-50 text-slate-400 hover:border-brand-200",
+                        isBooked && "opacity-40 grayscale cursor-not-allowed border-red-100 bg-red-50"
+                      )}
+                    >
+                      <TableIcon className="w-6 h-6 mb-1" />
+                      <span className="text-xs font-bold">T-{table.number}</span>
+                      <span className="text-[10px] opacity-60">{table.capacity} seats</span>
+                      {isBooked && (
+                        <span className="absolute top-2 right-2 text-[8px] font-black text-red-600 uppercase tracking-tighter">Booked</span>
+                      )}
+                    </button>
+                  );
+                })
+              )}
             </div>
 
             <div className="flex gap-4">
@@ -434,9 +532,14 @@ export default function BookingForm({ onBookingComplete, onCancel, initialData, 
               </button>
               <button
                 type="submit"
-                className="flex-1 p-5 bg-brand-900 text-white rounded-2xl font-bold hover:bg-brand-800 transition-all shadow-xl shadow-brand-900/20 flex items-center justify-center gap-2"
+                disabled={loadingTables}
+                className="flex-1 p-5 bg-brand-900 text-white rounded-2xl font-bold hover:bg-brand-800 transition-all shadow-xl shadow-brand-900/20 flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                <CheckCircle2 className="w-5 h-5" />
+                {loadingTables ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="w-5 h-5" />
+                )}
                 {isEditing ? 'Save Changes' : 'Confirm Reservation'}
               </button>
             </div>

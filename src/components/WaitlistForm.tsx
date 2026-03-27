@@ -5,11 +5,14 @@ import { useFirebase } from '../App';
 import { doc, setDoc, Timestamp } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { cn } from '../utils';
+import { sendEmail } from '../lib/emailService';
+import { getWaitlistEmail } from '../lib/emailTemplates';
 
 export default function WaitlistForm() {
   const { user } = useFirebase();
   const [formData, setFormData] = useState({
     name: user?.displayName || '',
+    email: user?.email || '',
     partySize: 2,
     phoneNumber: ''
   });
@@ -23,7 +26,9 @@ export default function WaitlistForm() {
     const entryId = Math.random().toString(36).substr(2, 9);
     const entryData = {
       id: entryId,
+      uid: user?.uid || 'guest',
       customerName: formData.name,
+      customerEmail: formData.email,
       partySize: formData.partySize,
       phoneNumber: formData.phoneNumber,
       status: 'Waiting',
@@ -33,6 +38,22 @@ export default function WaitlistForm() {
 
     try {
       await setDoc(doc(db, 'waitlist', entryId), entryData);
+      
+      // Send waitlist email
+      if (formData.email) {
+        const emailHtml = getWaitlistEmail({
+          name: formData.name,
+          guests: formData.partySize,
+          estimatedWait: '15-20'
+        });
+        
+        await sendEmail(
+          formData.email,
+          "You're on the Waitlist - Tampa Taste",
+          emailHtml
+        );
+      }
+
       setSubmitted(true);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `waitlist/${entryId}`);
@@ -83,6 +104,20 @@ export default function WaitlistForm() {
                 className="w-full p-6 bg-slate-50 rounded-[2rem] border-none focus:ring-2 focus:ring-brand-500 text-lg font-medium transition-all"
               />
             </div>
+            <div>
+              <label className="text-xs font-bold uppercase tracking-widest text-brand-600 mb-4 block">Email Address</label>
+              <input
+                type="email"
+                required
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                placeholder="your@email.com"
+                className="w-full p-6 bg-slate-50 rounded-[2rem] border-none focus:ring-2 focus:ring-brand-500 text-lg font-medium transition-all"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             <div>
               <label className="text-xs font-bold uppercase tracking-widest text-brand-600 mb-4 block">Party Size</label>
               <div className="flex items-center bg-slate-50 rounded-[2rem] p-2 border border-slate-100">

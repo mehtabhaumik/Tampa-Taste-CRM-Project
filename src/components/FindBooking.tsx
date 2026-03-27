@@ -5,6 +5,8 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, query, where, getDocs, doc, getDoc, updateDoc, deleteDoc, limit } from 'firebase/firestore';
 import { Booking } from '../types';
 import { cn, formatCurrency } from '../utils';
+import { sendEmail } from '../lib/emailService';
+import { getReservationEmail } from '../lib/emailTemplates';
 import BookingForm from './BookingForm';
 import { useFirebase } from '../App';
 
@@ -107,6 +109,23 @@ export default function FindBooking() {
     try {
       const { id, ...data } = updatedBooking;
       await updateDoc(doc(db, 'bookings', id), data);
+      
+      // Send update email if status is still Confirmed
+      if (updatedBooking.customerEmail && updatedBooking.status === 'Confirmed') {
+        const emailHtml = getReservationEmail({
+          name: updatedBooking.customerName,
+          date: updatedBooking.date,
+          time: updatedBooking.time,
+          guests: updatedBooking.guests,
+        }, true);
+        
+        await sendEmail(
+          updatedBooking.customerEmail,
+          `Reservation Updated - Tampa Taste #${updatedBooking.id}`,
+          emailHtml
+        );
+      }
+
       setBooking(updatedBooking);
       setIsEditing(false);
       setSuccessMessage('Your booking has been successfully updated.');
@@ -261,32 +280,13 @@ export default function FindBooking() {
                   {booking.status === 'Confirmed' && (
                     <div className="pt-6 mt-6 border-t border-slate-200 flex flex-col gap-4">
                       {isPast(booking.date, booking.time) ? (
-                        <div className="space-y-4">
-                          <div className="p-6 bg-brand-50 rounded-2xl border border-brand-100 text-center">
-                            <p className="text-sm font-bold text-brand-900 mb-4">How was your experience?</p>
-                            <div className="flex justify-center gap-2">
-                              {[1, 2, 3, 4, 5].map((star) => (
-                                <button
-                                  key={star}
-                                  onClick={() => handleRating(star)}
-                                  className={cn(
-                                    "p-1 transition-all hover:scale-110",
-                                    (booking.rating || 0) >= star ? "text-yellow-400" : "text-slate-300"
-                                  )}
-                                >
-                                  <svg className="w-8 h-8 fill-current" viewBox="0 0 24 24">
-                                    <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
-                                  </svg>
-                                </button>
-                              ))}
-                            </div>
-                            {booking.rating && (
-                              <p className="text-xs font-bold text-brand-600 mt-4 uppercase tracking-widest">
-                                You rated this {booking.rating} stars
-                              </p>
-                            )}
-                          </div>
-                        </div>
+                        <button
+                          onClick={() => handleUpdate({ ...booking, status: 'Fulfilled' })}
+                          disabled={loading}
+                          className="w-full p-4 bg-emerald-50 text-emerald-600 rounded-xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-emerald-100 transition-all"
+                        >
+                          <CheckCircle2 className="w-4 h-4" /> Mark as Fulfilled
+                        </button>
                       ) : isModifiable(booking.date, booking.time) ? (
                         <>
                           <div className="flex gap-4">
@@ -314,6 +314,35 @@ export default function FindBooking() {
                           This booking can no longer be modified online (less than 1 hour remaining).
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {booking.status === 'Fulfilled' && isPast(booking.date, booking.time) && (
+                    <div className="pt-6 mt-6 border-t border-slate-200">
+                      <div className="p-6 bg-brand-50 rounded-2xl border border-brand-100 text-center">
+                        <p className="text-sm font-bold text-brand-900 mb-4">How was your experience?</p>
+                        <div className="flex justify-center gap-2">
+                          {[1, 2, 3, 4, 5].map((star) => (
+                            <button
+                              key={star}
+                              onClick={() => handleRating(star)}
+                              className={cn(
+                                "p-1 transition-all hover:scale-110",
+                                (booking.rating || 0) >= star ? "text-yellow-400" : "text-slate-300"
+                              )}
+                            >
+                              <svg className="w-8 h-8 fill-current" viewBox="0 0 24 24">
+                                <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
+                              </svg>
+                            </button>
+                          ))}
+                        </div>
+                        {booking.rating && (
+                          <p className="text-xs font-bold text-brand-600 mt-4 uppercase tracking-widest">
+                            You rated this {booking.rating} stars
+                          </p>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

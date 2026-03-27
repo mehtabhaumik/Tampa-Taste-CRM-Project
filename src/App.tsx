@@ -24,8 +24,11 @@ import {
   LayoutDashboard, 
   Calendar as CalendarIcon, 
   TrendingUp,
-  X
+  X,
+  Globe
 } from 'lucide-react';
+import CustomerWebsite from './components/CustomerWebsite';
+import { ChatFacility } from './components/ChatFacility';
 import { 
   auth, 
   db, 
@@ -54,6 +57,8 @@ import {
   updateDoc,
   deleteDoc
 } from 'firebase/firestore';
+import { sendEmail } from './lib/emailService';
+import { getReservationEmail } from './lib/emailTemplates';
 import BookingForm from './components/BookingForm';
 import StaffDashboard from './components/StaffDashboard';
 import FeedbackForm from './components/FeedbackForm';
@@ -63,7 +68,6 @@ import FindBooking from './components/FindBooking';
 import { OrderFoodForm } from './components/OrderFoodForm';
 import { LanguageProvider, useLanguage } from './components/LanguageContext';
 import { LanguageSelector } from './components/LanguageSelector';
-import { ChatFacility } from './components/ChatFacility';
 import { Booking, MenuItem, UserProfile, Feedback, WaitlistEntry, Employee, Order, LoyaltyTransaction } from './types';
 import { INITIAL_MENU } from './constants';
 import { cn, formatCurrency } from './utils';
@@ -135,6 +139,23 @@ export const useFirebase = () => {
   const context = useContext(FirebaseContext);
   if (!context) throw new Error('useFirebase must be used within a FirebaseProvider');
   return context;
+};
+
+// Helper to safely parse dates from various formats (JS Date, Firestore Timestamp, string, number)
+const parseDate = (val: any): Date | null => {
+  if (!val) return null;
+  try {
+    if (val instanceof Date) return val;
+    if (typeof val.toDate === 'function') return val.toDate();
+    if (val && typeof val === 'object' && 'seconds' in val) {
+      const d = new Date(val.seconds * 1000);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? null : d;
+  } catch (e) {
+    return null;
+  }
 };
 
 export function FirebaseProvider({ children }: { children: React.ReactNode }) {
@@ -231,7 +252,8 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
           const data = doc.data();
           return {
             ...data,
-            createdAt: data.createdAt?.toDate()?.toISOString() || new Date().toISOString()
+            id: doc.id,
+            createdAt: parseDate(data.createdAt)?.toISOString() || new Date().toISOString()
           } as Booking;
         });
         setBookings(bookingsData);
@@ -265,7 +287,8 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
           const data = doc.data();
           return {
             ...data,
-            createdAt: data.createdAt?.toDate()?.toISOString() || new Date().toISOString()
+            id: doc.id,
+            createdAt: parseDate(data.createdAt)?.toISOString() || new Date().toISOString()
           } as Feedback;
         });
         setFeedback(feedbackData);
@@ -283,7 +306,8 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
           const data = doc.data();
           return {
             ...data,
-            createdAt: data.createdAt?.toDate()?.toISOString() || new Date().toISOString()
+            id: doc.id,
+            createdAt: parseDate(data.createdAt)?.toISOString() || new Date().toISOString()
           } as WaitlistEntry;
         });
         setWaitlist(waitlistData);
@@ -314,7 +338,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
           return {
             ...data,
             id: doc.id,
-            createdAt: data.createdAt?.toDate()?.toISOString() || new Date().toISOString()
+            createdAt: parseDate(data.createdAt)?.toISOString() || new Date().toISOString()
           } as Order;
         });
         setOrders(ordersData);
@@ -331,7 +355,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
         const loyaltyData = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data(),
-          createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
+          createdAt: parseDate(doc.data().createdAt)?.toISOString() || new Date().toISOString()
         } as LoyaltyTransaction));
         setLoyaltyTransactions(loyaltyData);
       }, (error) => {
@@ -348,7 +372,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
         const loyaltyData = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data(),
-          createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
+          createdAt: parseDate(doc.data().createdAt)?.toISOString() || new Date().toISOString()
         } as LoyaltyTransaction));
         setLoyaltyTransactions(loyaltyData);
       }, (error) => {
@@ -379,7 +403,15 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
 function MainApp() {
   const { user, profile, setProfile, isAuthReady, bookings, activeBookingsCount, menu, feedback, waitlist, employees, orders, loyaltyTransactions, loading } = useFirebase();
   const { t } = useLanguage();
-  const [view, setView] = useState<'landing' | 'customer' | 'staff' | 'waitlist' | 'feedback' | 'staff-login' | 'find-booking' | 'menu' | 'order-food'>('landing');
+  const [view, setView] = useState<'landing' | 'customer' | 'staff' | 'waitlist' | 'feedback' | 'staff-login' | 'find-booking' | 'menu' | 'order-food' | 'customer-portal'>('landing');
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const viewParam = params.get('view');
+    if (viewParam && ['landing', 'customer', 'staff', 'waitlist', 'feedback', 'staff-login', 'find-booking', 'menu', 'order-food', 'customer-portal'].includes(viewParam)) {
+      setView(viewParam as any);
+    }
+  }, []);
 
   const BOOKING_LIMIT = 24;
   const isFullyBooked = activeBookingsCount >= BOOKING_LIMIT;
@@ -515,6 +547,22 @@ function MainApp() {
     try {
       await setDoc(doc(db, 'bookings', booking.id), bookingData);
       
+      // Send confirmation email
+      if (booking.customerEmail) {
+        const emailHtml = getReservationEmail({
+          name: booking.customerName,
+          date: booking.date,
+          time: booking.time,
+          guests: booking.guests,
+        }, false);
+        
+        await sendEmail(
+          booking.customerEmail,
+          `Reservation Confirmed - Tampa Taste #${booking.id}`,
+          emailHtml
+        );
+      }
+
       // Redeem points if any
       if (booking.pointsRedeemed && booking.pointsRedeemed > 0 && user?.uid) {
         await loyaltyService.redeemPoints(
@@ -525,9 +573,7 @@ function MainApp() {
         );
       }
 
-      if (view === 'customer') {
-        setView('landing');
-      }
+      // No longer setting view to landing here, BookingForm will show success state
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `bookings/${booking.id}`);
     }
@@ -535,9 +581,32 @@ function MainApp() {
 
   const handleUpdateBooking = async (updated: Booking) => {
     try {
-      const bookingRef = doc(db, 'bookings', updated.id);
-      await updateDoc(bookingRef, { status: updated.status });
+      const { id, ...data } = updated;
       
+      // Convert createdAt back to Timestamp if it's a string
+      if (data.createdAt && typeof data.createdAt === 'string') {
+        data.createdAt = Timestamp.fromDate(new Date(data.createdAt));
+      }
+      
+      const bookingRef = doc(db, 'bookings', id);
+      await updateDoc(bookingRef, data);
+      
+      // Send modification email if status is still Confirmed
+      if (updated.customerEmail && updated.status === 'Confirmed') {
+        const emailHtml = getReservationEmail({
+          name: updated.customerName,
+          date: updated.date,
+          time: updated.time,
+          guests: updated.guests,
+        }, true); // true for modification
+        
+        await sendEmail(
+          updated.customerEmail,
+          `Reservation Modified - Tampa Taste #${updated.id}`,
+          emailHtml
+        );
+      }
+
       // Award points if fulfilled
       if (updated.status === 'Fulfilled' && updated.uid && updated.uid !== 'guest') {
         const totalAmount = updated.orderedItems.reduce((sum, item) => {
@@ -654,245 +723,112 @@ function MainApp() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="min-h-screen flex flex-col items-center justify-center relative overflow-hidden"
+            className="min-h-screen bg-slate-50 flex flex-col relative overflow-hidden"
           >
-            {/* Background Image with Overlay */}
-            <div className="absolute inset-0 z-0">
+            {/* Background Decoration */}
+            <div className="absolute inset-0 z-0 pointer-events-none">
+              <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-brand-500/5 rounded-full blur-[120px]" />
+              <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-brand-900/5 rounded-full blur-[120px]" />
               <img 
-                src="https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&q=80&w=2070" 
-                className="w-full h-full object-cover"
-                alt="Restaurant Background"
+                src="https://images.unsplash.com/photo-1552566626-52f8b828add9?auto=format&fit=crop&q=80&w=2070" 
+                className="w-full h-full object-cover opacity-[0.03] grayscale"
+                alt="Background"
                 referrerPolicy="no-referrer"
               />
-              <div className="absolute inset-0 bg-brand-900/80 backdrop-blur-[2px]" />
             </div>
 
-            <motion.div
-              initial={{ y: 20, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              transition={{ delay: 0.2 }}
-              className="relative z-10 text-center px-6 max-w-4xl"
+            {/* Header */}
+            <header className="relative z-10 w-full py-8 px-6">
+              <div className="max-w-7xl mx-auto flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-brand-900 text-white rounded-xl flex items-center justify-center shadow-lg">
+                    <Utensils className="w-6 h-6" />
+                  </div>
+                  <span className="text-2xl font-bold font-serif text-brand-900">Tampa Taste</span>
+                </div>
+                <div className="flex items-center gap-4">
+                  <LanguageSelector />
+                </div>
+              </div>
+            </header>
+
+            {/* Main Content - Staff Login Only */}
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="relative z-10 flex-1 flex flex-col items-center justify-center px-6 py-12"
             >
-              <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-8">
-                <div className="w-16 h-16 sm:w-20 sm:h-20 bg-white/10 backdrop-blur-md rounded-3xl flex items-center justify-center border border-white/20 shadow-2xl">
-                  <Utensils className="text-white w-8 h-8 sm:w-10 sm:h-10" />
+              <div className="w-full max-w-md">
+                <div className="text-center mb-10">
+                  <div className="w-20 h-20 bg-brand-900 text-white rounded-[2.5rem] flex items-center justify-center mx-auto mb-6 shadow-2xl shadow-brand-900/20">
+                    <ShieldCheck className="w-10 h-10" />
+                  </div>
+                  <h1 className="text-4xl font-bold tracking-tight text-brand-900 font-serif mb-2">Staff Portal</h1>
+                  <p className="text-slate-500 text-sm font-medium uppercase tracking-widest">Authorized Access Only</p>
                 </div>
-                <h1 className="text-5xl sm:text-7xl font-bold tracking-tighter text-white font-serif">{t('welcome')}</h1>
-              </div>
-              
-              <p className="text-2xl text-white/70 mb-12 font-light max-w-2xl mx-auto text-balance">
-                {t('tagline')}
-              </p>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 w-full max-w-6xl mb-12">
-                {!isFullyBooked ? (
-                  <button
-                    onClick={() => handleLogin('customer')}
-                    className="group relative glass p-6 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] hover:scale-[1.02] transition-all text-left"
-                  >
-                    <div className="w-10 h-10 sm:w-12 sm:h-12 bg-brand-900 text-white rounded-2xl flex items-center justify-center mb-4 sm:mb-6 shadow-lg">
-                      <Utensils className="w-5 h-5 sm:w-6 sm:h-6" />
-                    </div>
-                    <h3 className="text-xl sm:text-2xl font-bold mb-2 text-brand-900">{t('bookTable')}</h3>
-                    <p className="text-slate-500 text-xs sm:text-sm mb-4 sm:mb-6">{t('reserveSpot')}</p>
-                    <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-brand-600">
-                      {t('bookTable')} <ChevronRight className="w-3 h-3 sm:w-4 sm:h-4 group-hover:translate-x-1 transition-transform" />
-                    </div>
-                    <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between">
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Current Bookings</span>
-                      <span className="text-sm font-mono font-bold text-brand-900">{activeBookingsCount} / {BOOKING_LIMIT}</span>
-                    </div>
-                    {waitingCount > 0 && (
-                      <div className="mt-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-brand-600">
-                        <Users className="w-3 h-3" /> {waitingCount} {t('waiting')}
-                      </div>
-                    )}
-                  </button>
-                ) : (
-                  <div className="group relative glass p-6 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] border-brand-200 bg-brand-50/30 text-left">
-                    <div className="w-10 h-10 sm:w-12 sm:h-12 bg-slate-200 text-slate-400 rounded-2xl flex items-center justify-center mb-4 sm:mb-6 shadow-lg">
-                      <Utensils className="w-5 h-5 sm:w-6 sm:h-6" />
-                    </div>
-                    <h3 className="text-xl sm:text-2xl font-bold mb-2 text-slate-400">{t('fullyBooked')}</h3>
-                    <p className="text-slate-500 text-xs sm:text-sm mb-4 sm:mb-6">{t('noTablesLeft')}</p>
-                    <button
-                      onClick={() => handleLogin('waitlist')}
-                      className="flex items-center gap-2 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-brand-600 hover:text-brand-900 transition-colors"
-                    >
-                      {t('joinWaitlist')} <ChevronRight className="w-3 h-3 sm:w-4 sm:h-4" />
-                    </button>
-                    <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between">
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{t('capacityReached')}</span>
-                      <span className="text-sm font-mono font-bold text-brand-900">{activeBookingsCount} / {BOOKING_LIMIT}</span>
-                    </div>
-                    {waitingCount > 0 && (
-                      <div className="mt-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-brand-600">
-                        <Users className="w-3 h-3" /> {waitingCount} {t('waiting')}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {isFullyBooked && (
-                  <button
-                    onClick={() => handleLogin('waitlist')}
-                    className="group relative glass p-6 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] hover:scale-[1.02] transition-all text-left"
-                  >
-                    <div className="w-10 h-10 sm:w-12 sm:h-12 bg-brand-900 text-white rounded-2xl flex items-center justify-center mb-4 sm:mb-6 shadow-lg">
-                      <ListOrdered className="w-5 h-5 sm:w-6 sm:h-6" />
-                    </div>
-                    <h3 className="text-xl sm:text-2xl font-bold mb-2 text-brand-900">{t('joinWaitlist')}</h3>
-                    <p className="text-slate-500 text-xs sm:text-sm mb-4 sm:mb-6">{t('noTablesLeft')}</p>
-                    <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-brand-600">
-                      {t('joinWaitlist')} <ChevronRight className="w-3 h-3 sm:w-4 sm:h-4 group-hover:translate-x-1 transition-transform" />
-                    </div>
-                  </button>
-                )}
-
-                <button
-                  onClick={() => setView('order-food')}
-                  className="group relative glass p-6 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] hover:scale-[1.02] transition-all text-left"
-                >
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-brand-900 text-white rounded-2xl flex items-center justify-center mb-4 sm:mb-6 shadow-lg">
-                    <ShoppingBag className="w-5 h-5 sm:w-6 sm:h-6" />
-                  </div>
-                  <h3 className="text-xl sm:text-2xl font-bold mb-2 text-brand-900">{t('orderFood')}</h3>
-                  <p className="text-slate-500 text-xs sm:text-sm mb-4 sm:mb-6">{t('deliveryInfo')}</p>
-                  <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-brand-600">
-                    {t('orderFood')} <ChevronRight className="w-3 h-3 sm:w-4 sm:h-4 group-hover:translate-x-1 transition-transform" />
-                  </div>
-                </button>
-
-                <button
-                  onClick={() => handleLogin('feedback')}
-                  className="group relative glass p-6 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] hover:scale-[1.02] transition-all text-left"
-                >
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-brand-900 text-white rounded-2xl flex items-center justify-center mb-4 sm:mb-6 shadow-lg">
-                    <MessageSquare className="w-5 h-5 sm:w-6 sm:h-6" />
-                  </div>
-                  <h3 className="text-xl sm:text-2xl font-bold mb-2 text-brand-900">{t('feedback')}</h3>
-                  <p className="text-slate-500 text-xs sm:text-sm mb-4 sm:mb-6">{t('rateExperience')}</p>
-                  <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-brand-600">
-                    {t('feedback')} <ChevronRight className="w-3 h-3 sm:w-4 sm:h-4 group-hover:translate-x-1 transition-transform" />
-                  </div>
-                </button>
-
-                <button
-                  onClick={() => handleLogin('find-booking')}
-                  className="group relative glass p-6 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] hover:scale-[1.02] transition-all text-left"
-                >
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-brand-900 text-white rounded-2xl flex items-center justify-center mb-4 sm:mb-6 shadow-lg">
-                    <Search className="w-5 h-5 sm:w-6 sm:h-6" />
-                  </div>
-                  <h3 className="text-xl sm:text-2xl font-bold mb-2 text-brand-900">{t('manageBooking')}</h3>
-                  <p className="text-slate-500 text-xs sm:text-sm mb-4 sm:mb-6">{t('findEditCancel')}</p>
-                  <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-brand-600">
-                    {t('manageBooking')} <ChevronRight className="w-3 h-3 sm:w-4 sm:h-4 group-hover:translate-x-1 transition-transform" />
-                  </div>
-                </button>
-
-                <button
-                  onClick={() => handleLogin('staff')}
-                  className="group relative glass p-6 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] hover:scale-[1.02] transition-all text-left"
-                >
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-brand-900 text-white rounded-2xl flex items-center justify-center mb-4 sm:mb-6 shadow-lg">
-                    <ShieldCheck className="w-5 h-5 sm:w-6 sm:h-6" />
-                  </div>
-                  <h3 className="text-xl sm:text-2xl font-bold mb-2 text-brand-900">{t('staffPortal')}</h3>
-                  <p className="text-slate-500 text-xs sm:text-sm mb-4 sm:mb-6">{t('trackPerformance')}</p>
-                  <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-brand-600">
-                    {t('staffPortal')} <ChevronRight className="w-3 h-3 sm:w-4 sm:h-4 group-hover:translate-x-1 transition-transform" />
-                  </div>
-                </button>
-
-                <button
-                  onClick={() => setView('menu')}
-                  className="group relative glass p-6 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] hover:scale-[1.02] transition-all text-left"
-                >
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-brand-900 text-white rounded-2xl flex items-center justify-center mb-4 sm:mb-6 shadow-lg">
-                    <Utensils className="w-5 h-5 sm:w-6 sm:h-6" />
-                  </div>
-                  <h3 className="text-xl sm:text-2xl font-bold mb-2 text-brand-900">{t('ourMenu')}</h3>
-                  <p className="text-slate-500 text-xs sm:text-sm mb-4 sm:mb-6">{t('exploreMenu')}</p>
-                  <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-brand-600">
-                    {t('ourMenu')} <ChevronRight className="w-3 h-3 sm:w-4 sm:h-4 group-hover:translate-x-1 transition-transform" />
-                  </div>
-                </button>
-              </div>
-
-              {/* Contact Us Section */}
-              <div className="w-full max-w-6xl mt-24 mb-12 px-6">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                  <div className="glass p-6 sm:p-8 rounded-[2.5rem] text-left">
-                    <div className="w-10 h-10 sm:w-12 sm:h-12 bg-brand-900 text-white rounded-2xl flex items-center justify-center mb-4 sm:mb-6 shadow-lg">
-                      <MapPin className="w-5 h-5 sm:w-6 sm:h-6" />
-                    </div>
-                    <h3 className="text-xl font-bold mb-2 text-brand-900">{t('visitUs')}</h3>
-                    <p className="text-slate-500 text-sm leading-relaxed">
-                      123 Tampa Riverwalk<br />
-                      Tampa, FL 33602
-                    </p>
-                  </div>
-
-                  <div className="glass p-6 sm:p-8 rounded-[2.5rem] text-left">
-                    <div className="w-10 h-10 sm:w-12 sm:h-12 bg-brand-900 text-white rounded-2xl flex items-center justify-center mb-4 sm:mb-6 shadow-lg">
-                      <Phone className="w-5 h-5 sm:w-6 sm:h-6" />
-                    </div>
-                    <h3 className="text-xl font-bold mb-2 text-brand-900">{t('callUs')}</h3>
-                    <p className="text-slate-500 text-sm leading-relaxed">
-                      (813) 555-0123<br />
-                      Mon-Sun: 11am - 10pm
-                    </p>
-                  </div>
-
-                  <div className="glass p-6 sm:p-8 rounded-[2.5rem] text-left">
-                    <div className="w-10 h-10 sm:w-12 sm:h-12 bg-brand-900 text-white rounded-2xl flex items-center justify-center mb-4 sm:mb-6 shadow-lg">
-                      <Mail className="w-5 h-5 sm:w-6 sm:h-6" />
-                    </div>
-                    <h3 className="text-xl font-bold mb-2 text-brand-900">{t('emailUs')}</h3>
-                    <p className="text-slate-500 text-sm leading-relaxed">
-                      hello@tampataste.com<br />
-                      support@tampataste.com
-                    </p>
-                  </div>
+                <div className="glass p-8 sm:p-10 rounded-[3rem] shadow-2xl border border-white/20">
+                  <StaffLogin 
+                    onLoginSuccess={handleStaffLoginSuccess}
+                  />
                 </div>
-              </div>
 
-              {user && (
-                <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="relative z-10 mt-12 flex items-center gap-4 glass p-2 pl-4 rounded-full"
-                >
-                  <span className="text-xs font-bold text-white/60">Logged in as {user.email || user.phoneNumber}</span>
+                <div className="mt-12 text-center">
+                  <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-6">Looking for the customer site?</p>
                   <button 
-                    onClick={() => signOut(auth)}
-                    className="p-2 bg-white text-brand-900 rounded-full hover:bg-white/80 transition-all"
+                    onClick={() => window.open(window.location.origin + '?view=customer-portal', '_blank')}
+                    className="group flex items-center gap-4 px-8 py-5 bg-white rounded-[2.5rem] shadow-xl hover:shadow-2xl transition-all border border-slate-100 hover:border-brand-200 mx-auto"
                   >
-                    <LogOut className="w-4 h-4" />
+                    <div className="w-12 h-12 bg-brand-50 text-brand-900 rounded-2xl flex items-center justify-center group-hover:bg-brand-900 group-hover:text-white transition-colors">
+                      <Globe className="w-6 h-6" />
+                    </div>
+                    <div className="text-left">
+                      <p className="text-sm font-bold text-brand-900 leading-none mb-1">Visit Customer Website</p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">Public Access • No Login Required</p>
+                    </div>
+                    <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-brand-900 transition-colors" />
                   </button>
-                </motion.div>
-              )}
-
-              <footer className="relative z-10 w-full py-12 border-t border-white/10 mt-24">
-                <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6 px-6">
-                  <div className="flex flex-col items-center md:items-start gap-2">
-                    <p className="text-white/40 text-sm">
-                      © {new Date().getFullYear()} Tampa Taste. All rights reserved.
-                    </p>
-                    <p className="text-white/20 text-[10px] uppercase tracking-widest font-bold">
-                      Powered by Google AI Studio
-                    </p>
-                  </div>
-                  <p className="text-white/40 text-sm font-medium">
-                    Developed by <span className="text-white">Bhaumik Mehta</span>
-                  </p>
                 </div>
-              </footer>
+
+                {user && (
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="mt-8 flex items-center justify-center gap-4 glass p-2 pl-4 rounded-full mx-auto w-fit"
+                  >
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Logged in as {user.email || user.phoneNumber}</span>
+                    <button 
+                      onClick={() => signOut(auth)}
+                      className="p-2 bg-brand-900 text-white rounded-full hover:bg-brand-800 transition-all"
+                    >
+                      <LogOut className="w-3 h-3" />
+                    </button>
+                  </motion.div>
+                )}
+              </div>
             </motion.div>
 
-            {/* Chat Facility */}
-            <ChatFacility />
+            {/* Footer */}
+            <footer className="relative z-10 w-full py-12 border-t border-slate-100 bg-white/50 backdrop-blur-sm">
+              <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6 px-6">
+                <div className="flex flex-col items-center md:items-start gap-2">
+                  <p className="text-slate-400 text-sm">
+                    © {new Date().getFullYear()} Tampa Taste. All rights reserved.
+                  </p>
+                  <p className="text-slate-300 text-[10px] uppercase tracking-widest font-bold">
+                    System Version 2.4.0
+                  </p>
+                </div>
+                <div className="flex flex-col items-center md:items-end gap-1">
+                  <p className="text-slate-400 text-sm font-medium">
+                    Developed by <span className="text-brand-900">Bhaumik Mehta</span>
+                  </p>
+                  <p className="text-[10px] text-slate-300 uppercase tracking-widest font-bold">
+                    Powered by Google AI Studio
+                  </p>
+                </div>
+              </div>
+            </footer>
 
             {/* Phone Login Modal */}
             <AnimatePresence>
@@ -996,22 +932,24 @@ function MainApp() {
                 </motion.div>
               )}
             </AnimatePresence>
+          </motion.div>
+        )}
 
-            {user && (
-              <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="relative z-10 mt-12 flex items-center gap-4 glass p-2 pl-4 rounded-full"
-              >
-                <span className="text-xs font-bold text-white/60">Logged in as {user.email || user.phoneNumber}</span>
-                <button 
-                  onClick={() => signOut(auth)}
-                  className="p-2 bg-white text-brand-900 rounded-full hover:bg-white/80 transition-all"
-                >
-                  <LogOut className="w-4 h-4" />
-                </button>
-              </motion.div>
-            )}
+
+        {view === 'customer-portal' && (
+          <motion.div
+            key="customer-portal"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="min-h-screen"
+          >
+            <CustomerWebsite 
+              menu={menu} 
+              onBookingComplete={handleBookingComplete} 
+              isAdmin={profile?.roles?.includes('Admin')}
+              user={user}
+            />
           </motion.div>
         )}
 
@@ -1093,7 +1031,10 @@ function MainApp() {
               >
                 ← Back to Home
               </button>
-              <BookingForm onBookingComplete={handleBookingComplete} />
+              <BookingForm 
+                onBookingComplete={handleBookingComplete} 
+                onCancel={() => setView('landing')}
+              />
             </div>
           </motion.div>
         )}
@@ -1119,7 +1060,9 @@ function MainApp() {
         )}
 
         {view === 'order-food' && (
-          <OrderFoodForm menu={menu} user={user} onClose={() => setView('landing')} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <OrderFoodForm menu={menu} user={user} onClose={() => setView('landing')} />
+          </div>
         )}
 
         {view === 'feedback' && (
@@ -1203,10 +1146,12 @@ function MainApp() {
               onUpdateOrder={handleUpdateOrder}
               onCancelOrder={handleCancelOrder}
               loyaltyTransactions={loyaltyTransactions}
+              user={user}
             />
           </motion.div>
         )}
       </AnimatePresence>
+      {view !== 'staff' && <ChatFacility />}
     </div>
   );
 }

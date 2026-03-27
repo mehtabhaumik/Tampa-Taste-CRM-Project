@@ -33,7 +33,7 @@ export interface Table {
   status: 'Available' | 'Reserved' | 'Occupied';
 }
 
-export type UserRole = 'Admin' | 'Manager' | 'Chef' | 'Waiter' | 'Accountant' | 'Customer';
+export type UserRole = 'Super Admin' | 'Admin' | 'Manager' | 'Chef' | 'Waiter' | 'Accountant' | 'Customer';
 
 export interface UserProfile {
   uid: string;

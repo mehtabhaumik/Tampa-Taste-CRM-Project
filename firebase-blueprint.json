@@ -74,6 +74,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string" },
+        "uid": { "type": "string" },
         "customerName": { "type": "string" },
         "partySize": { "type": "integer" },
         "phoneNumber": { "type": "string" },
@@ -81,7 +82,7 @@
         "estimatedWaitTime": { "type": "integer", "description": "Estimated wait time in minutes." },
         "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["id", "customerName", "partySize", "status", "createdAt"]
+      "required": ["id", "uid", "customerName", "partySize", "status", "createdAt"]
     },
     "Employee": {
       "title": "Employee",
@@ -168,6 +169,24 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "uid", "type", "amount", "createdAt"]
+    },
+    "CustomerPortalSettings": {
+      "title": "CustomerPortalSettings",
+      "description": "Configuration for the customer-facing website layout.",
+      "type": "object",
+      "properties": {
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "label": { "type": "string" },
+              "enabled": { "type": "boolean" }
+            }
+          }
+        }
+      }
     }
   },
   "firestore": {
@@ -206,6 +225,10 @@
     "/loyaltyTransactions": {
       "schema": "LoyaltyTransaction",
       "description": "History of loyalty point changes."
+    },
+    "/settings": {
+      "schema": "CustomerPortalSettings",
+      "description": "Global application settings."
     }
   }
 }

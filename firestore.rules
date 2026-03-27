@@ -90,11 +90,11 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    function isAdmin() {
+    function isStaff() {
       return isAuthenticated() && (
         (request.auth.token.get('email', '') == "ui.bhaumik@gmail.com") ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['Admin', 'Manager', 'Accountant']))
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roles', []).hasAny(['Admin', 'Manager', 'Chef', 'Waiter', 'Accountant']))
       );
     }
 
@@ -102,15 +102,15 @@ service cloud.firestore {
       return isAuthenticated() && (
         (request.auth.token.get('email', '') == "ui.bhaumik@gmail.com") ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['Admin']))
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roles', []).hasAny(['Admin']))
       );
     }
 
-    function isStaff() {
+    function isAdmin() {
       return isAuthenticated() && (
         (request.auth.token.get('email', '') == "ui.bhaumik@gmail.com") ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['Admin', 'Manager', 'Chef', 'Waiter', 'Accountant']))
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roles', []).hasAny(['Admin', 'Manager', 'Accountant']))
       );
     }
 
@@ -126,8 +126,8 @@ service cloud.firestore {
       return request.resource.data.keys().hasOnly(fields);
     }
 
-    function areBookingSensitiveFieldsUnchanged() {
-      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['id', 'customerName', 'customerEmail', 'phoneNumber', 'tableNumber', 'date', 'time', 'guests', 'uid', 'createdAt']);
+    function areBookingIdentityFieldsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['id', 'uid', 'createdAt']);
     }
 
     function isValidEmail(email) {
@@ -144,6 +144,10 @@ service cloud.firestore {
 
     function isValidTimeString(timeStr) {
       return timeStr is string && timeStr.matches("^\\d{2}:\\d{2}$");
+    }
+
+    function isValidDateTimeString(dateTimeStr) {
+      return dateTimeStr is string && dateTimeStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
     }
 
     // ===============================================================
@@ -174,7 +178,7 @@ service cloud.firestore {
              isValidTimeString(data.time) &&
              data.guests is int && data.guests > 0 && data.guests <= 20 &&
              data.status in ['Confirmed', 'Completed', 'Cancelled', 'Fulfilled'] &&
-             data.createdAt is timestamp &&
+             (data.createdAt is timestamp || isValidDateTimeString(data.createdAt)) &&
              (!('orderedItems' in data) || (data.orderedItems is list && data.orderedItems.size() <= 50)) &&
              (!('uid' in data) || data.uid is string) &&
              (!('rating' in data) || (data.rating is int && data.rating >= 1 && data.rating <= 5)) &&
@@ -198,28 +202,29 @@ service cloud.firestore {
              data.customerName is string && data.customerName.size() < 100 &&
              data.rating is int && data.rating >= 1 && data.rating <= 5 &&
              (!('comment' in data) || (data.comment is string && data.comment.size() < 1000)) &&
-             data.createdAt is timestamp &&
+             (data.createdAt is timestamp || isValidDateTimeString(data.createdAt)) &&
              (!('uid' in data) || data.uid is string);
     }
 
     function isValidWaitlistEntry(data) {
-      return hasOnlyAllowedFields(['id', 'customerName', 'partySize', 'phoneNumber', 'status', 'estimatedWaitTime', 'createdAt']) &&
-             data.keys().hasAll(['id', 'customerName', 'partySize', 'status', 'createdAt']) &&
+      return hasOnlyAllowedFields(['id', 'customerName', 'partySize', 'phoneNumber', 'status', 'estimatedWaitTime', 'createdAt', 'uid']) &&
+             data.keys().hasAll(['id', 'customerName', 'partySize', 'status', 'createdAt', 'uid']) &&
              data.id is string &&
-             data.customerName is string && data.customerName.size() < 100 &&
+             data.customerName is string && data.customerName.size() <= 100 &&
              data.partySize is int && data.partySize > 0 &&
              data.status in ['Waiting', 'Notified', 'Seated', 'Cancelled'] &&
-             (!('phoneNumber' in data) || data.phoneNumber is string) &&
+             (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 20)) &&
              (!('estimatedWaitTime' in data) || data.estimatedWaitTime is int) &&
-             data.createdAt is timestamp;
+             (data.createdAt is timestamp || isValidDateTimeString(data.createdAt)) &&
+             data.uid is string;
     }
 
     function isValidEmployee(data) {
       return data.id is string &&
-             data.firstName is string &&
-             data.lastName is string &&
-             data.employeeCode is string &&
-             data.roles is list &&
+             data.firstName is string && data.firstName.size() <= 50 &&
+             data.lastName is string && data.lastName.size() <= 50 &&
+             data.employeeCode is string && data.employeeCode.size() <= 10 &&
+             data.roles is list && data.roles.size() <= 10 &&
              data.active is bool;
     }
 
@@ -228,14 +233,20 @@ service cloud.firestore {
              data.keys().hasAll(['uid', 'roles']) &&
              data.uid is string &&
              (!('email' in data) || data.email == "" || isValidEmail(data.email)) &&
-             data.roles is list && data.roles.size() > 0 &&
+             data.roles is list && data.roles.size() > 0 && data.roles.size() <= 10 &&
              data.roles.hasOnly(['Admin', 'Manager', 'Chef', 'Waiter', 'Accountant', 'Customer']) &&
-             (!('employeeCode' in data) || data.employeeCode is string) &&
-             (!('displayName' in data) || data.displayName is string) &&
-             (!('firstName' in data) || data.firstName is string) &&
-             (!('lastName' in data) || data.lastName is string) &&
+             (!('employeeCode' in data) || (data.employeeCode is string && data.employeeCode.size() <= 10)) &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 100)) &&
+             (!('firstName' in data) || (data.firstName is string && data.firstName.size() <= 50)) &&
+             (!('lastName' in data) || (data.lastName is string && data.lastName.size() <= 50)) &&
              (!('loyaltyPoints' in data) || data.loyaltyPoints is int) &&
-             (!('phoneNumber' in data) || data.phoneNumber is string);
+             (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 20));
+    }
+
+    function isStaffLogin(data) {
+      return data.get('employeeCode', '') != '' && 
+             exists(/databases/$(database)/documents/employees/$(data.employeeCode)) &&
+             data.roles == get(/databases/$(database)/documents/employees/$(data.employeeCode)).data.get('roles', []);
     }
 
     function isValidOrder(data) {
@@ -243,11 +254,11 @@ service cloud.firestore {
              data.keys().hasAll(['customerName', 'customerEmail', 'phoneNumber', 'address', 'items', 'total', 'paymentMethod', 'status', 'createdAt']) &&
              (!('id' in data) || data.id is string) &&
              (!('uid' in data) || data.uid is string) &&
-             data.customerName is string && data.customerName.size() < 100 &&
+             data.customerName is string && data.customerName.size() <= 100 &&
              data.customerEmail is string && isValidEmail(data.customerEmail) &&
-             data.phoneNumber is string &&
-             data.address is string && data.address.size() < 500 &&
-             data.items is list && data.items.size() > 0 &&
+             data.phoneNumber is string && data.phoneNumber.size() <= 20 &&
+             data.address is string && data.address.size() <= 500 &&
+             data.items is list && data.items.size() > 0 && data.items.size() <= 50 &&
              data.total is number && data.total >= 0 &&
              data.paymentMethod in ['Cash', 'Credit Card'] &&
              (!('cardDetails' in data) || (
@@ -260,7 +271,7 @@ service cloud.firestore {
              data.status in ['Pending', 'Preparing', 'Out for Delivery', 'Delivered', 'Cancelled', 'Fulfilled'] &&
              (!('pointsEarned' in data) || data.pointsEarned is int) &&
              (!('pointsRedeemed' in data) || data.pointsRedeemed is int) &&
-             data.createdAt is timestamp;
+             (data.createdAt is timestamp || isValidDateTimeString(data.createdAt));
     }
 
     function isValidLoyaltyTransaction(data) {
@@ -270,9 +281,9 @@ service cloud.firestore {
              data.uid is string &&
              data.type in ['Earned', 'Redeemed'] &&
              data.amount is int &&
-             data.description is string &&
+             data.description is string && data.description.size() <= 200 &&
              (!('referenceId' in data) || data.referenceId is string) &&
-             data.createdAt is timestamp;
+             (data.createdAt is timestamp || isValidDateTimeString(data.createdAt));
     }
 
     // ===============================================================
@@ -284,12 +295,29 @@ service cloud.firestore {
       allow create: if isAuthenticated() && isValidUser(request.resource.data) && 
                     (isOwner(userId) || isAdmin());
       allow update: if isAuthenticated() && isValidUser(request.resource.data) && 
-                    (isOwner(userId) || isStaff());
+                    (
+                      isAdmin() || 
+                      (isOwner(userId) && 
+                       request.resource.data.roles == resource.data.roles && 
+                       (!('loyaltyPoints' in request.resource.data) || request.resource.data.loyaltyPoints <= resource.data.get('loyaltyPoints', 0)) &&
+                       (!('employeeCode' in request.resource.data) || request.resource.data.employeeCode == resource.data.get('employeeCode', ''))
+                      ) ||
+                      (isOwner(userId) && isStaffLogin(request.resource.data))
+                    );
+    }
+
+    match /settings/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /test/connection {
+      allow read: if true;
     }
 
     match /loyaltyTransactions/{transactionId} {
-      allow read: if isStaff() || (isAuthenticated() && resource.data.uid == request.auth.uid);
-      allow create: if isStaff() && isValidLoyaltyTransaction(request.resource.data);
+      allow read, list: if (isAuthenticated() && resource.data.get('uid', '') == request.auth.uid) || isStaff();
+      allow create: if isStaff() || (isAuthenticated() && request.resource.data.get('uid', '') == request.auth.uid && request.resource.data.type == 'Redeemed');
       allow update, delete: if isAdmin();
     }
 
@@ -300,21 +328,23 @@ service cloud.firestore {
     }
 
     match /bookings/{bookingId} {
-      allow get: if true;
+      allow get: if true; // Allow anyone to find a booking by ID
       allow list: if isStaff() || 
-                   (isAuthenticated() && resource.data.customerEmail == request.auth.token.email) || 
-                   (resource.data.status == 'Confirmed');
+                   (isAuthenticated() && resource.data.get('uid', '') == request.auth.uid) ||
+                   (resource.data.status == 'Confirmed'); // For availability checks
       
       // Allow creation by booking managers OR by customers (non-staff)
       allow create: if (isBookingManager() || !isStaff()) && isValidBooking(request.resource.data);
       
       // Allow update/delete by booking managers OR by the customer who owns the booking
-      // Also allow unauthenticated updates if sensitive fields are unchanged (for guest management)
+      // Also allow updates for guest bookings if identity fields are unchanged
       allow update: if (isBookingManager() || 
-                        (isAuthenticated() && resource.data.customerEmail == request.auth.token.email) ||
-                        (!isAuthenticated() && areBookingSensitiveFieldsUnchanged())) && 
+                        (isAuthenticated() && resource.data.get('uid', '') == request.auth.uid) ||
+                        (isAuthenticated() && resource.data.get('customerEmail', '') != '' && resource.data.get('customerEmail', '') == request.auth.token.get('email', '')) ||
+                        areBookingIdentityFieldsUnchanged()) && 
                     isValidBooking(request.resource.data);
-      allow delete: if isBookingManager() || (isAuthenticated() && resource.data.customerEmail == request.auth.token.email);
+      allow delete: if isBookingManager() || 
+                    (isAuthenticated() && resource.data.get('uid', '') == request.auth.uid);
     }
 
     match /tables/{tableId} {
@@ -324,13 +354,13 @@ service cloud.firestore {
     }
 
     match /feedback/{feedbackId} {
-      allow read: if isStaff() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow read: if (isAuthenticated() && resource.data.uid == request.auth.uid) || isStaff();
       allow create: if isValidFeedback(request.resource.data) && (!('uid' in request.resource.data) || request.resource.data.uid == 'guest' || request.resource.data.uid == request.auth.uid);
       allow update, delete: if isAdmin();
     }
 
     match /waitlist/{entryId} {
-      allow read: if isStaff() || (resource.data.id == entryId); // Allow someone to see their own entry if they have the ID
+      allow read, list: if (isAuthenticated() && resource.data.get('uid', '') == request.auth.uid) || isStaff();
       allow create: if isValidWaitlistEntry(request.resource.data);
       allow update: if isStaff() && isValidWaitlistEntry(request.resource.data);
       allow delete: if isAdmin();
@@ -351,7 +381,7 @@ service cloud.firestore {
     }
 
     match /orders/{orderId} {
-      allow read: if isStaff() || (isAuthenticated() && resource.data.get('uid', '') == request.auth.uid);
+      allow read: if (isAuthenticated() && resource.data.get('uid', '') == request.auth.uid) || isStaff();
       allow create: if isValidOrder(request.resource.data) && 
                     (!('uid' in request.resource.data) || (isAuthenticated() && request.resource.data.uid == request.auth.uid));
       allow update: if isStaff() && isValidOrder(request.resource.data);

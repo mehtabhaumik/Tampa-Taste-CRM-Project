@@ -15,9 +15,8 @@ export const ChatFacility: React.FC = () => {
 
   useEffect(() => {
     const checkTime = () => {
-      const now = new Date();
-      const hours = now.getHours();
-      setIsChatOpen(hours >= 8 && hours < 23);
+      // Chat is now available 24/7 for better customer support
+      setIsChatOpen(true);
     };
 
     checkTime();
@@ -97,7 +96,7 @@ export const ChatFacility: React.FC = () => {
   if (!isChatOpen) return null;
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-4">
+    <div className="fixed bottom-6 right-6 z-[110] flex flex-col items-end gap-4">
       {/* Welcome Message Animation */}
       <AnimatePresence>
         {showWelcome && !isOpen && (
@@ -105,14 +104,14 @@ export const ChatFacility: React.FC = () => {
             initial={{ opacity: 0, y: 20, scale: 0.8 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, scale: 0.8 }}
-            className="bg-primary text-primary-foreground px-4 py-2 rounded-2xl shadow-xl text-sm font-medium mb-2 relative"
+            className="bg-white text-brand-900 px-4 py-2 rounded-2xl shadow-xl text-sm font-medium mb-2 relative border border-slate-100"
           >
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
               {t('chatOpen')}
             </div>
             {/* Triangle pointer */}
-            <div className="absolute -bottom-2 right-6 w-4 h-4 bg-primary rotate-45" />
+            <div className="absolute -bottom-2 right-6 w-4 h-4 bg-white border-b border-r border-slate-100 rotate-45" />
           </motion.div>
         )}
       </AnimatePresence>
