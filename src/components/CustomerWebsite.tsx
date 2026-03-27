@@ -4,7 +4,6 @@ import {
   Utensils, 
   Calendar, 
   ShoppingBag, 
-  MessageSquare, 
   Search, 
   MapPin, 
   Phone, 
@@ -616,9 +615,9 @@ function Footer() {
         </div>
 
         <div className="pt-12 border-t border-white/5 flex flex-col md:flex-row justify-between items-center gap-6 text-[10px] font-bold uppercase tracking-[0.2em] text-white/20">
-          <p>© 2026 {t('welcome')}. {t('allRightsReserved')}</p>
+          <p>© 2025 {t('welcome')}. {t('allRightsReserved')}</p>
           <div className="flex gap-8">
-            <p>{t('developedBy')} <span className="text-white/40">Bhaumik Mehta</span></p>
+            <p className="text-[9px]">{t('developedBy')} <span className="text-white/40">Bhaumik Mehta</span></p>
             <p>{t('poweredBy')} <span className="text-white/40">Google AI Studio</span></p>
           </div>
         </div>

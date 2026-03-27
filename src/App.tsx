@@ -11,7 +11,6 @@ import {
   LogOut, 
   Loader2, 
   ListOrdered, 
-  MessageSquare,
   ShoppingBag,
   Apple, 
   Mail, 
@@ -28,7 +27,6 @@ import {
   Globe
 } from 'lucide-react';
 import CustomerWebsite from './components/CustomerWebsite';
-import { ChatFacility } from './components/ChatFacility';
 import { 
   auth, 
   db, 
@@ -813,15 +811,15 @@ function MainApp() {
               <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6 px-6">
                 <div className="flex flex-col items-center md:items-start gap-2">
                   <p className="text-slate-400 text-sm">
-                    © {new Date().getFullYear()} Tampa Taste. All rights reserved.
+                    © 2025 Tampa Taste. All rights reserved.
                   </p>
                   <p className="text-slate-300 text-[10px] uppercase tracking-widest font-bold">
                     System Version 2.4.0
                   </p>
                 </div>
                 <div className="flex flex-col items-center md:items-end gap-1">
-                  <p className="text-slate-400 text-sm font-medium">
-                    Developed by <span className="text-brand-900">Bhaumik Mehta</span>
+                  <p className="text-slate-400 text-xs font-medium">
+                    Envisioned and Developed by <span className="text-brand-900">Bhaumik Mehta</span>
                   </p>
                   <p className="text-[10px] text-slate-300 uppercase tracking-widest font-bold">
                     Powered by Google AI Studio
@@ -1151,7 +1149,6 @@ function MainApp() {
           </motion.div>
         )}
       </AnimatePresence>
-      {view !== 'staff' && <ChatFacility />}
     </div>
   );
 }
