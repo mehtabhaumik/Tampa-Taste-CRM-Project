@@ -94,7 +94,7 @@ service cloud.firestore {
       return isAuthenticated() && (
         (request.auth.token.get('email', '') == "ui.bhaumik@gmail.com") ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roles', []).hasAny(['Admin', 'Manager', 'Chef', 'Waiter', 'Accountant']))
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roles', []).hasAny(['Admin', 'Manager', 'Chef', 'Waiter', 'Accountant', 'Super Admin']))
       );
     }
 
@@ -102,7 +102,7 @@ service cloud.firestore {
       return isAuthenticated() && (
         (request.auth.token.get('email', '') == "ui.bhaumik@gmail.com") ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roles', []).hasAny(['Admin']))
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roles', []).hasAny(['Admin', 'Super Admin']))
       );
     }
 
@@ -110,7 +110,7 @@ service cloud.firestore {
       return isAuthenticated() && (
         (request.auth.token.get('email', '') == "ui.bhaumik@gmail.com") ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roles', []).hasAny(['Admin', 'Manager', 'Accountant']))
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roles', []).hasAny(['Admin', 'Manager', 'Accountant', 'Super Admin']))
       );
     }
 
@@ -118,7 +118,7 @@ service cloud.firestore {
       return isAuthenticated() && (
         (request.auth.token.get('email', '') == "ui.bhaumik@gmail.com") ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roles', []).hasAny(['Admin', 'Manager', 'Accountant']))
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roles', []).hasAny(['Admin', 'Manager', 'Accountant', 'Super Admin']))
       );
     }
 
@@ -220,27 +220,38 @@ service cloud.firestore {
     }
 
     function isValidEmployee(data) {
-      return data.id is string &&
+      return hasOnlyAllowedFields(['id', 'firstName', 'lastName', 'name', 'email', 'phone', 'address', 'employeeCode', 'designation', 'roles', 'active', 'createdBy', 'createdAt', 'lastLoggedIn']) &&
+             data.id is string &&
              data.firstName is string && data.firstName.size() <= 50 &&
              data.lastName is string && data.lastName.size() <= 50 &&
+             (!('name' in data) || (data.name is string && data.name.size() <= 100)) &&
+             (!('email' in data) || data.email == "" || isValidEmail(data.email)) &&
+             (!('phone' in data) || (data.phone is string && data.phone.size() <= 20)) &&
+             (!('address' in data) || (data.address is string && data.address.size() <= 200)) &&
              data.employeeCode is string && data.employeeCode.size() <= 10 &&
+             (!('designation' in data) || (data.designation is string && data.designation.size() <= 100)) &&
              data.roles is list && data.roles.size() <= 10 &&
-             data.active is bool;
+             data.active is bool &&
+             (!('createdBy' in data) || data.createdBy is string) &&
+             (!('createdAt' in data) || data.createdAt is timestamp || isValidDateTimeString(data.createdAt)) &&
+             (!('lastLoggedIn' in data) || data.lastLoggedIn is timestamp || isValidDateTimeString(data.lastLoggedIn));
     }
 
     function isValidUser(data) {
-      return hasOnlyAllowedFields(['uid', 'email', 'roles', 'employeeCode', 'displayName', 'firstName', 'lastName', 'loyaltyPoints', 'phoneNumber']) &&
+      return hasOnlyAllowedFields(['uid', 'email', 'roles', 'employeeCode', 'displayName', 'firstName', 'lastName', 'loyaltyPoints', 'phoneNumber', 'lastLoggedIn', 'active']) &&
              data.keys().hasAll(['uid', 'roles']) &&
              data.uid is string &&
              (!('email' in data) || data.email == "" || isValidEmail(data.email)) &&
              data.roles is list && data.roles.size() > 0 && data.roles.size() <= 10 &&
-             data.roles.hasOnly(['Admin', 'Manager', 'Chef', 'Waiter', 'Accountant', 'Customer']) &&
+             data.roles.hasOnly(['Admin', 'Manager', 'Chef', 'Waiter', 'Accountant', 'Customer', 'Super Admin']) &&
              (!('employeeCode' in data) || (data.employeeCode is string && data.employeeCode.size() <= 10)) &&
              (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 100)) &&
              (!('firstName' in data) || (data.firstName is string && data.firstName.size() <= 50)) &&
              (!('lastName' in data) || (data.lastName is string && data.lastName.size() <= 50)) &&
              (!('loyaltyPoints' in data) || data.loyaltyPoints is int) &&
-             (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 20));
+             (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 20)) &&
+             (!('lastLoggedIn' in data) || data.lastLoggedIn is timestamp || isValidDateTimeString(data.lastLoggedIn)) &&
+             (!('active' in data) || data.active is bool);
     }
 
     function isStaffLogin(data) {
@@ -374,9 +385,20 @@ service cloud.firestore {
       // Only admins/managers can create/update, but only SuperAdmin can touch Admin employees
       allow create: if isAdmin() && isValidEmployee(request.resource.data) &&
                     (!request.resource.data.roles.hasAny(['Admin']) || isSuperAdmin());
-      allow update: if isAdmin() && isValidEmployee(request.resource.data) &&
-                    (!resource.data.roles.hasAny(['Admin']) || isSuperAdmin()) &&
-                    (!request.resource.data.roles.hasAny(['Admin']) || isSuperAdmin());
+      
+      // Allow update if:
+      // 1. User is an Admin and has permission
+      // 2. User is the employee themselves and ONLY updating lastLoggedIn
+      allow update: if (
+        (isAdmin() && isValidEmployee(request.resource.data) &&
+         (!resource.data.roles.hasAny(['Admin']) || isSuperAdmin()) &&
+         (!request.resource.data.roles.hasAny(['Admin']) || isSuperAdmin())) ||
+        (isAuthenticated() && 
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('employeeCode', '') == employeeId &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastLoggedIn']))
+      );
+      
       allow delete: if isSuperAdmin();
     }
 

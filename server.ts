@@ -53,13 +53,13 @@ async function startServer() {
       }
 
       const fromEmail = (process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev").trim();
-      const fromName = (process.env.RESEND_FROM_NAME || "PortfolioContact").trim();
+      const fromName = (process.env.RESEND_FROM_NAME || "Tampa Taste").trim();
       
       // If using onboarding@resend.dev, it MUST be exactly that address without a name in many cases
       // Otherwise, use the quoted name format which is safer for names with spaces
       const from = fromEmail === "onboarding@resend.dev" 
         ? "onboarding@resend.dev" 
-        : `"${fromName}" <${fromEmail}>`;
+        : `${fromName} <${fromEmail}>`;
 
       console.log(`Using from address: ${from}`);
 

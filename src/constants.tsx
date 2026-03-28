@@ -238,3 +238,54 @@ export const TABLES: Table[] = [
   { number: 7, capacity: 4, status: 'Available' },
   { number: 8, capacity: 2, status: 'Available' },
 ];
+
+export const INITIAL_EMPLOYEES: any[] = [
+  {
+    id: '1111',
+    firstName: 'Bhaumik',
+    lastName: 'Mehta',
+    name: 'Bhaumik Mehta',
+    roles: ['Admin', 'Manager', 'Super Admin'],
+    employeeCode: '1111',
+    email: 'ui.bhaumik@gmail.com',
+    active: true,
+    designation: 'Owner',
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: '4444',
+    firstName: 'Admin',
+    lastName: 'Staff',
+    name: 'Admin',
+    roles: ['Admin'],
+    employeeCode: '4444',
+    email: 'admin@tampataste.com',
+    active: true,
+    designation: 'Administrator',
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: '2222',
+    firstName: 'John',
+    lastName: 'Manager',
+    name: 'John Manager',
+    roles: ['Manager'],
+    employeeCode: '2222',
+    email: 'manager@tampataste.com',
+    active: true,
+    designation: 'Restaurant Manager',
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: '3333',
+    firstName: 'Sarah',
+    lastName: 'Waiter',
+    name: 'Sarah Waiter',
+    roles: ['Waiter'],
+    employeeCode: '3333',
+    email: 'waiter@tampataste.com',
+    active: true,
+    designation: 'Senior Waiter',
+    createdAt: new Date().toISOString()
+  }
+];

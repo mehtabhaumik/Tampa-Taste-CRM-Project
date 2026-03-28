@@ -51,8 +51,10 @@ export interface FirestoreErrorInfo {
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   console.error('Full Firestore Error Object:', error);
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errorMessage,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -69,8 +71,27 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path
   }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  
+  // Log the detailed error for debugging
+  console.error('Detailed Firestore Error:', JSON.stringify(errInfo));
+
+  // Determine a user-friendly message
+  let friendlyMessage = "An unexpected database error occurred. Please try again.";
+  
+  if (errorMessage.includes('permission-denied') || errorMessage.includes('insufficient permissions')) {
+    friendlyMessage = `Access Denied: You don't have permission to ${operationType} data at ${path || 'this location'}. Please ensure you are logged in with the correct account.`;
+  } else if (errorMessage.includes('not-found')) {
+    friendlyMessage = `Data Not Found: The requested information at ${path || 'this location'} could not be located.`;
+  } else if (errorMessage.includes('unavailable')) {
+    friendlyMessage = "Service Unavailable: The database is currently offline or unreachable. Please check your internet connection.";
+  } else if (errorMessage.includes('quota-exceeded')) {
+    friendlyMessage = "Quota Exceeded: The daily limit for database operations has been reached. Please try again tomorrow.";
+  }
+
+  // Create a new error with the friendly message but attach the details
+  const enhancedError = new Error(friendlyMessage);
+  (enhancedError as any).details = errInfo;
+  throw enhancedError;
 }
 
 // Validate Connection to Firestore

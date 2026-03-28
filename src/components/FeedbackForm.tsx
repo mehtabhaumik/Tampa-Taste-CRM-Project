@@ -4,7 +4,7 @@ import { Star, Send, CheckCircle2 } from 'lucide-react';
 import { useFirebase } from '../App';
 import { doc, setDoc, Timestamp } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { cn } from '../utils';
+import { cn, validateNoNumerics } from '../utils';
 
 export default function FeedbackForm() {
   const { user } = useFirebase();
@@ -13,10 +13,16 @@ export default function FeedbackForm() {
   const [comment, setComment] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (rating === 0) return;
+    
+    if (!validateNoNumerics(customerName)) {
+      setError('Name cannot contain numbers');
+      return;
+    }
 
     setLoading(true);
     const feedbackId = Math.random().toString(36).substr(2, 9);
@@ -72,10 +78,20 @@ export default function FeedbackForm() {
                 type="text"
                 required
                 value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (validateNoNumerics(val)) {
+                    setCustomerName(val);
+                    setError(null);
+                  }
+                }}
                 placeholder="Enter your name"
-                className="w-full p-8 bg-slate-50 rounded-[2rem] border-none focus:ring-2 focus:ring-brand-500 text-lg font-medium placeholder:text-slate-300 transition-all"
+                className={cn(
+                  "w-full p-8 bg-white rounded-[2rem] border focus:ring-2 text-lg font-bold text-slate-900 placeholder:text-slate-400 transition-all shadow-sm",
+                  error ? "border-red-500 ring-2 ring-red-500 focus:ring-red-500" : "border-slate-200 focus:ring-brand-500"
+                )}
               />
+              {error && <p className="text-red-500 text-[10px] mt-2 font-bold px-4">{error}</p>}
             </div>
           )}
           <div>

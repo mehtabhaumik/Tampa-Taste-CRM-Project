@@ -10,6 +10,7 @@ import { useFirebase } from '../App';
 import { loyaltyService } from '../services/loyaltyService';
 import { sendEmail } from '../lib/emailService';
 import { getOrderEmail } from '../lib/emailTemplates';
+import { cn, formatPhoneNumber, validateEmail, validateNoNumerics } from '../utils';
 
 interface OrderFoodFormProps {
   menu: MenuItem[];
@@ -40,6 +41,7 @@ export const OrderFoodForm: React.FC<OrderFoodFormProps> = ({ menu, user, onClos
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pointsToRedeem, setPointsToRedeem] = useState(0);
+  const [errors, setErrors] = useState<{ [key: string]: string }>({});
 
   const availablePoints = profile?.loyaltyPoints || 0;
   const maxRedeemable = Math.min(availablePoints, Math.floor(cart.reduce((acc, curr) => acc + curr.item.price * curr.quantity, 0)));
@@ -100,6 +102,20 @@ export const OrderFoodForm: React.FC<OrderFoodFormProps> = ({ menu, user, onClos
       }
       return i;
     }));
+  };
+
+  const handleDetailsNext = () => {
+    const newErrors: { [key: string]: string } = {};
+    if (!validateEmail(details.email)) newErrors.email = 'Invalid email address';
+    if (!validateNoNumerics(details.name)) newErrors.name = 'Name cannot contain numbers';
+    if (details.phone.replace(/[^\d]/g, '').length < 10) newErrors.phone = 'Invalid phone number';
+
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      return;
+    }
+    setErrors({});
+    setStep('checkout');
   };
 
   const handleSubmit = async () => {
@@ -330,10 +346,17 @@ export const OrderFoodForm: React.FC<OrderFoodFormProps> = ({ menu, user, onClos
                       type="text"
                       required
                       value={details.name}
-                      onChange={e => setDetails({ ...details, name: e.target.value })}
-                      className="w-full px-4 py-3 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none transition-all"
+                      onChange={e => {
+                        setDetails({ ...details, name: e.target.value });
+                        if (errors.name) setErrors({ ...errors, name: '' });
+                      }}
+                      className={cn(
+                        "w-full px-4 py-3 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none transition-all",
+                        errors.name && "border-red-500 focus:ring-red-500"
+                      )}
                       placeholder="John Doe"
                     />
+                    {errors.name && <p className="text-red-500 text-[10px] mt-1 font-bold uppercase tracking-widest">{errors.name}</p>}
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
@@ -341,10 +364,17 @@ export const OrderFoodForm: React.FC<OrderFoodFormProps> = ({ menu, user, onClos
                       type="email"
                       required
                       value={details.email}
-                      onChange={e => setDetails({ ...details, email: e.target.value })}
-                      className="w-full px-4 py-3 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none transition-all"
+                      onChange={e => {
+                        setDetails({ ...details, email: e.target.value });
+                        if (errors.email) setErrors({ ...errors, email: '' });
+                      }}
+                      className={cn(
+                        "w-full px-4 py-3 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none transition-all",
+                        errors.email && "border-red-500 focus:ring-red-500"
+                      )}
                       placeholder="john@example.com"
                     />
+                    {errors.email && <p className="text-red-500 text-[10px] mt-1 font-bold uppercase tracking-widest">{errors.email}</p>}
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
@@ -352,10 +382,17 @@ export const OrderFoodForm: React.FC<OrderFoodFormProps> = ({ menu, user, onClos
                       type="tel"
                       required
                       value={details.phone}
-                      onChange={e => setDetails({ ...details, phone: e.target.value })}
-                      className="w-full px-4 py-3 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none transition-all"
-                      placeholder="+1 (555) 000-0000"
+                      onChange={e => {
+                        setDetails({ ...details, phone: formatPhoneNumber(e.target.value) });
+                        if (errors.phone) setErrors({ ...errors, phone: '' });
+                      }}
+                      className={cn(
+                        "w-full px-4 py-3 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none transition-all",
+                        errors.phone && "border-red-500 focus:ring-red-500"
+                      )}
+                      placeholder="(555) 000-0000"
                     />
+                    {errors.phone && <p className="text-red-500 text-[10px] mt-1 font-bold uppercase tracking-widest">{errors.phone}</p>}
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Delivery Address</label>
@@ -376,7 +413,7 @@ export const OrderFoodForm: React.FC<OrderFoodFormProps> = ({ menu, user, onClos
                     Back
                   </button>
                   <button
-                    onClick={() => setStep('checkout')}
+                    onClick={handleDetailsNext}
                     disabled={!details.name || !details.email || !details.phone || !details.address}
                     className="flex-[2] bg-orange-600 text-white py-3 rounded-xl font-bold hover:bg-orange-700 transition-colors disabled:opacity-50"
                   >

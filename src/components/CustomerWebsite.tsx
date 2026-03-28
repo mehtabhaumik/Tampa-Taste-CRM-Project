@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../utils';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, query, collection, where, getDocs } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import BookingForm from './BookingForm';
 import { OrderFoodForm } from './OrderFoodForm';
@@ -63,6 +63,34 @@ export default function CustomerWebsite({ menu, onBookingComplete, isAdmin = fal
   const [showConfig, setShowConfig] = useState(false);
   const [activeSection, setActiveSection] = useState('hero');
   const [showOrderModal, setShowOrderModal] = useState(false);
+  const [isTodayFull, setIsTodayFull] = useState(false);
+
+  useEffect(() => {
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    
+    const q = query(
+      collection(db, 'bookings'),
+      where('date', '==', today),
+      where('status', '==', 'Confirmed')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const currentHour = new Date().getHours();
+      const isNotClosed = currentHour < 22;
+      
+      const timeSlots = ['17:00', '18:00', '19:00', '20:00', '21:00'];
+      const totalCapacity = timeSlots.length * 8;
+      const currentBookings = snapshot.docs.length;
+      
+      const isFull = currentBookings >= totalCapacity;
+      setIsTodayFull(isFull && isNotClosed);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'bookings');
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(doc(db, 'settings', 'customer_portal'), (docSnap) => {
@@ -121,7 +149,7 @@ export default function CustomerWebsite({ menu, onBookingComplete, isAdmin = fal
           </div>
 
           <div className="hidden md:flex items-center gap-8">
-            {sections.filter(s => s.enabled && s.id !== 'hero' && s.id !== 'footer').map(section => (
+            {sections.filter(s => s.enabled && s.id !== 'hero' && s.id !== 'footer' && (s.id !== 'waitlist' || isTodayFull || isAdmin)).map(section => (
               <button
                 key={section.id}
                 onClick={() => scrollTo(section.id)}
@@ -239,7 +267,7 @@ export default function CustomerWebsite({ menu, onBookingComplete, isAdmin = fal
                 </div>
               </div>
             )}
-            {section.id === 'waitlist' && (
+            {section.id === 'waitlist' && (isTodayFull || isAdmin) && (
               <div className="py-24 bg-white">
                 <div className="max-w-3xl mx-auto px-6">
                   <div className="text-center mb-16">

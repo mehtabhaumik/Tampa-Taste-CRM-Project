@@ -4,7 +4,7 @@ import { Users, Phone, Clock, CheckCircle2, Loader2 } from 'lucide-react';
 import { useFirebase } from '../App';
 import { doc, setDoc, Timestamp } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { cn } from '../utils';
+import { cn, validateEmail, validateNoNumerics, formatPhoneNumber } from '../utils';
 import { sendEmail } from '../lib/emailService';
 import { getWaitlistEmail } from '../lib/emailTemplates';
 
@@ -18,9 +18,22 @@ export default function WaitlistForm() {
   });
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Validation
+    const newErrors: Record<string, string> = {};
+    if (!validateNoNumerics(formData.name)) newErrors.name = 'Name cannot contain numbers';
+    if (!validateEmail(formData.email)) newErrors.email = 'Invalid email format';
+    if (formData.phoneNumber.replace(/[^\d]/g, '').length !== 10) newErrors.phoneNumber = 'Phone number must be 10 digits';
+    
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      return;
+    }
+
     setLoading(true);
 
     const entryId = Math.random().toString(36).substr(2, 9);
@@ -99,10 +112,24 @@ export default function WaitlistForm() {
                 type="text"
                 required
                 value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (validateNoNumerics(val)) {
+                    setFormData({ ...formData, name: val });
+                    if (errors.name) {
+                      const newErrors = { ...errors };
+                      delete newErrors.name;
+                      setErrors(newErrors);
+                    }
+                  }
+                }}
                 placeholder="Your Name"
-                className="w-full p-6 bg-slate-50 rounded-[2rem] border-none focus:ring-2 focus:ring-brand-500 text-lg font-medium transition-all"
+                className={cn(
+                  "w-full p-6 bg-white rounded-[2rem] border focus:ring-2 text-lg font-bold text-slate-900 placeholder:text-slate-400 transition-all shadow-sm",
+                  errors.name ? "border-red-500 ring-2 ring-red-500 focus:ring-red-500" : "border-slate-200 focus:ring-brand-500"
+                )}
               />
+              {errors.name && <p className="text-red-500 text-[10px] mt-2 font-bold px-4">{errors.name}</p>}
             </div>
             <div>
               <label className="text-xs font-bold uppercase tracking-widest text-brand-600 mb-4 block">Email Address</label>
@@ -110,10 +137,21 @@ export default function WaitlistForm() {
                 type="email"
                 required
                 value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                onChange={(e) => {
+                  setFormData({ ...formData, email: e.target.value });
+                  if (errors.email) {
+                    const newErrors = { ...errors };
+                    delete newErrors.email;
+                    setErrors(newErrors);
+                  }
+                }}
                 placeholder="your@email.com"
-                className="w-full p-6 bg-slate-50 rounded-[2rem] border-none focus:ring-2 focus:ring-brand-500 text-lg font-medium transition-all"
+                className={cn(
+                  "w-full p-6 bg-white rounded-[2rem] border focus:ring-2 text-lg font-bold text-slate-900 placeholder:text-slate-400 transition-all shadow-sm",
+                  errors.email ? "border-red-500 ring-2 ring-red-500 focus:ring-red-500" : "border-slate-200 focus:ring-brand-500"
+                )}
               />
+              {errors.email && <p className="text-red-500 text-[10px] mt-2 font-bold px-4">{errors.email}</p>}
             </div>
           </div>
 
@@ -151,11 +189,23 @@ export default function WaitlistForm() {
                 type="tel"
                 required
                 value={formData.phoneNumber}
-                onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
+                onChange={(e) => {
+                  const formatted = formatPhoneNumber(e.target.value);
+                  setFormData({ ...formData, phoneNumber: formatted });
+                  if (errors.phoneNumber) {
+                    const newErrors = { ...errors };
+                    delete newErrors.phoneNumber;
+                    setErrors(newErrors);
+                  }
+                }}
                 placeholder="(555) 000-0000"
-                className="w-full p-6 pl-20 bg-slate-50 rounded-[2rem] border-none focus:ring-2 focus:ring-brand-500 text-lg font-medium transition-all"
+                className={cn(
+                  "w-full p-6 pl-20 bg-white rounded-[2rem] border focus:ring-2 text-lg font-bold text-slate-900 placeholder:text-slate-400 transition-all shadow-sm",
+                  errors.phoneNumber ? "border-red-500 ring-2 ring-red-500 focus:ring-red-500" : "border-slate-200 focus:ring-brand-500"
+                )}
               />
             </div>
+            {errors.phoneNumber && <p className="text-red-500 text-[10px] mt-2 font-bold px-4">{errors.phoneNumber}</p>}
           </div>
 
           <button

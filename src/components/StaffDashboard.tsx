@@ -22,7 +22,8 @@ import {
   Hash,
   Pencil,
   ShoppingBag,
-  Globe
+  Globe,
+  LogOut
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -43,7 +44,8 @@ import { User } from 'firebase/auth';
 import BookingForm from './BookingForm';
 import CustomerWebsite from './CustomerWebsite';
 import { INITIAL_MENU } from '../constants';
-import { cn, formatCurrency } from '../utils';
+import { cn, formatCurrency, parseDate, validateEmail, validateNoNumerics, formatPhoneNumber } from '../utils';
+import { exportToCSV, exportToPDF } from '../lib/exportUtils';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, doc, setDoc, Timestamp } from 'firebase/firestore';
 
@@ -66,24 +68,9 @@ interface StaffDashboardProps {
   onCancelOrder: (id: string) => void;
   loyaltyTransactions: LoyaltyTransaction[];
   user: User | null;
+  addToast: (message: string, type: 'success' | 'error' | 'info') => void;
+  onLogout: () => void;
 }
-
-// Helper to safely parse dates from various formats (JS Date, Firestore Timestamp, string, number)
-const parseDate = (val: any): Date | null => {
-  if (!val) return null;
-  try {
-    if (val instanceof Date) return val;
-    if (typeof val.toDate === 'function') return val.toDate();
-    if (val && typeof val === 'object' && 'seconds' in val) {
-      const d = new Date(val.seconds * 1000);
-      return isNaN(d.getTime()) ? null : d;
-    }
-    const d = new Date(val);
-    return isNaN(d.getTime()) ? null : d;
-  } catch (e) {
-    return null;
-  }
-};
 
 export default function StaffDashboard({ 
   bookings, 
@@ -103,7 +90,9 @@ export default function StaffDashboard({
   onUpdateOrder,
   onCancelOrder,
   loyaltyTransactions,
-  user
+  user,
+  addToast,
+  onLogout
 }: StaffDashboardProps) {
   const [activeTab, setActiveTab] = useState<'overview' | 'bookings' | 'menu' | 'waitlist' | 'feedback' | 'staff' | 'orders' | 'loyalty' | 'customer-portal'>('overview');
   const [searchQuery, setSearchQuery] = useState('');
@@ -114,9 +103,10 @@ export default function StaffDashboard({
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [trendDays, setTrendDays] = useState(7);
 
-  const isSuperAdmin = profile?.roles?.includes('Super Admin') || profile?.employeeCode === '1111';
-  const isAdmin = profile?.roles?.includes('Admin') || isSuperAdmin;
-  const isAdminOrManager = profile?.roles?.some(r => ['Admin', 'Manager', 'Accountant', 'Super Admin'].includes(r)) || profile?.employeeCode === '1111';
+  const isSuperAdmin = profile?.employeeCode === '1111' || (Array.isArray(profile?.roles) && profile.roles.includes('Super Admin'));
+  const isAdmin4444 = profile?.employeeCode === '4444';
+  const isAdmin = (Array.isArray(profile?.roles) && profile.roles.includes('Admin')) || isSuperAdmin || isAdmin4444;
+  const isAdminOrManager = (Array.isArray(profile?.roles) && profile.roles.some(r => ['Admin', 'Manager', 'Accountant', 'Super Admin'].includes(r))) || isSuperAdmin || isAdmin4444;
   
   // Find current employee details from the employees list to keep sidebar in sync
   const currentEmployee = useMemo(() => {
@@ -139,6 +129,7 @@ export default function StaffDashboard({
   const [showWaitlistForm, setShowWaitlistForm] = useState(false);
   const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+  const [showMenuDeleteConfirm, setShowMenuDeleteConfirm] = useState<string | null>(null);
 
   const handleBookingComplete = async (booking: Booking) => {
     if (editingBooking) {
@@ -171,6 +162,7 @@ export default function StaffDashboard({
   });
   const [adminCode, setAdminCode] = useState('');
   const [formLoading, setFormLoading] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   // Menu Form State
   const [showMenuForm, setShowMenuForm] = useState(false);
@@ -188,6 +180,7 @@ export default function StaffDashboard({
     setShowEmployeeForm(false);
     setEditingEmployee(null);
     setAdminCode('');
+    setErrors({});
     setNewEmployee({
       firstName: '',
       lastName: '',
@@ -202,6 +195,7 @@ export default function StaffDashboard({
 
   const handleOpenEmployeeForm = (emp: Employee | null = null) => {
     setAdminCode('');
+    setErrors({});
     if (emp) {
       setEditingEmployee(emp);
       setNewEmployee({
@@ -233,20 +227,44 @@ export default function StaffDashboard({
   const handleCreateEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    // Form Validation
+    const newErrors: Record<string, string> = {};
+    if (!validateNoNumerics(newEmployee.firstName)) newErrors.firstName = 'First name cannot contain numbers';
+    if (!validateNoNumerics(newEmployee.lastName)) newErrors.lastName = 'Last name cannot contain numbers';
+    if (newEmployee.email && !validateEmail(newEmployee.email)) newErrors.email = 'Invalid email format';
+    if (newEmployee.phone && newEmployee.phone.replace(/[^\d]/g, '').length !== 10) newErrors.phone = 'Phone number must be 10 digits';
+    
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      addToast('Please fix the errors in the form.', 'error');
+      return;
+    }
+
     // Authorization check
     if (editingEmployee) {
+      const isTargetAdmin = editingEmployee.roles.includes('Admin') || editingEmployee.roles.includes('Super Admin') || editingEmployee.employeeCode === '1111' || editingEmployee.employeeCode === '4444';
+      
+      if (isAdmin4444 && isTargetAdmin) {
+        addToast('Admin cannot update other Admin or Super Admin accounts.', 'error');
+        return;
+      }
+
       const isTargetSuperAdmin = editingEmployee.roles.includes('Super Admin') || editingEmployee.employeeCode === '1111';
       if (!isSuperAdmin && isTargetSuperAdmin) {
-        alert('Only a Super Admin can update another Super Admin.');
+        addToast('Only a Super Admin can update another Super Admin.', 'error');
         return;
       }
       if (!isAdmin && !isSuperAdmin) {
-        alert('You do not have permission to update employees.');
+        addToast('You do not have permission to update employees.', 'error');
         return;
       }
     } else {
       if (!canAddEmployee) {
-        alert('You do not have permission to add new employees.');
+        addToast('You do not have permission to add new employees.', 'error');
+        return;
+      }
+      if (isAdmin4444 && newEmployee.roles.some(r => ['Admin', 'Super Admin'].includes(r))) {
+        addToast('Admin cannot create new Admin or Super Admin accounts.', 'error');
         return;
       }
     }
@@ -255,13 +273,13 @@ export default function StaffDashboard({
     const isSettingPrivileged = newEmployee.roles.some(r => ['Super Admin', 'Admin'].includes(r));
     
     if ((editingEmployee || isSettingPrivileged) && adminCode !== '9999') {
-      alert('Security Code "9999" is required for all employee updates and for assigning Admin/Super Admin roles.');
+      addToast('Security Code "9999" is required for all employee updates and for assigning Admin/Super Admin roles.', 'error');
       return;
     }
 
     // Mutually exclusive roles check
     if (newEmployee.roles.includes('Super Admin') && newEmployee.roles.includes('Admin')) {
-      alert('An employee cannot have both "Super Admin" and "Admin" roles simultaneously.');
+      addToast('An employee cannot have both "Super Admin" and "Admin" roles simultaneously.', 'error');
       return;
     }
 
@@ -287,7 +305,7 @@ export default function StaffDashboard({
         if (newEmployee.address.trim()) employeeData.address = newEmployee.address.trim();
 
         await setDoc(doc(db, 'employees', editingEmployee.id), employeeData);
-        alert('Employee updated successfully!');
+        addToast('Employee updated successfully!', 'success');
       } else {
         const code = Math.floor(1000 + Math.random() * 9000).toString();
         const id = code; // Using code as ID for simplicity
@@ -309,7 +327,7 @@ export default function StaffDashboard({
         if (newEmployee.address.trim()) employeeData.address = newEmployee.address.trim();
 
         await setDoc(doc(db, 'employees', id), employeeData);
-        alert(`Employee created successfully! Employee Code: ${code}`);
+        addToast(`Employee created successfully! Employee Code: ${code}`, 'success');
       }
       
       handleCloseEmployeeForm();
@@ -358,7 +376,7 @@ export default function StaffDashboard({
     const today = new Date().toISOString().split('T')[0];
     const todayBookings = bookings.filter(b => b.date === today);
     const totalRevenue = bookings.reduce((acc, b) => {
-      return acc + b.orderedItems.reduce((sum, item) => {
+      return acc + (b.orderedItems || []).reduce((sum, item) => {
         const menuItem = menu.find(m => m.id === item.itemId);
         return sum + (menuItem?.price || 0) * item.quantity;
       }, 0);
@@ -383,7 +401,7 @@ export default function StaffDashboard({
       name: date.split('-').slice(1).join('/'),
       bookings: bookings.filter(b => b.date === date).length,
       revenue: bookings.filter(b => b.date === date).reduce((acc, b) => {
-        return acc + b.orderedItems.reduce((sum, item) => {
+        return acc + (b.orderedItems || []).reduce((sum, item) => {
           const menuItem = menu.find(m => m.id === item.itemId);
           return sum + (menuItem?.price || 0) * item.quantity;
         }, 0);
@@ -445,14 +463,8 @@ export default function StaffDashboard({
   }, [waitlist, searchQuery, selectedWaitlistDate]);
 
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden font-sans relative">
-      {/* Mobile Sidebar Toggle */}
-      <button 
-        onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-        className="lg:hidden fixed bottom-6 right-6 z-[60] w-14 h-14 bg-brand-900 text-white rounded-full shadow-2xl flex items-center justify-center"
-      >
-        {isSidebarOpen ? <XCircle className="w-6 h-6" /> : <LayoutDashboard className="w-6 h-6" />}
-      </button>
+    <div className="flex h-screen bg-slate-50 overflow-hidden font-sans relative text-slate-900">
+      {/* Mobile Sidebar Toggle - Removed from here to move to header */}
 
       {/* Sidebar */}
       <aside className={cn(
@@ -491,7 +503,7 @@ export default function StaffDashboard({
                 "w-full flex items-center gap-3 p-3 rounded-xl transition-all font-medium",
                 activeTab === item.id 
                   ? "bg-white text-brand-900 shadow-xl" 
-                  : "text-white/60 hover:bg-white/5"
+                  : "text-white/80 hover:bg-white/10"
               )}
             >
               <item.icon className="w-5 h-5" />
@@ -509,68 +521,108 @@ export default function StaffDashboard({
               <p className="font-bold truncate max-w-[120px]">
                 {currentEmployee ? `${currentEmployee.firstName} ${currentEmployee.lastName}` : (profile?.firstName ? `${profile.firstName} ${profile.lastName}` : profile?.displayName || profile?.email?.split('@')[0] || 'Staff')}
               </p>
-              <p className="text-white/40 text-[10px] font-mono">ID: {profile?.employeeCode || 'N/A'}</p>
-              <p className="text-white/40 truncate max-w-[120px] text-[10px]">{currentEmployee?.roles?.join(', ') || profile?.roles?.join(', ') || 'Employee'}</p>
+              <p className="text-white/70 text-[10px] font-mono">ID: {profile?.employeeCode || 'N/A'}</p>
+              <p className="text-white/70 truncate max-w-[120px] text-[10px]">{currentEmployee?.roles?.join(', ') || profile?.roles?.join(', ') || 'Employee'}</p>
+              {profile?.lastLoggedIn && (
+                <p className="text-white/40 text-[9px] mt-1 flex items-center gap-1">
+                  <Clock className="w-2 h-2" />
+                  Last Login: {parseDate(profile.lastLoggedIn)?.toLocaleString() || 'N/A'}
+                </p>
+              )}
             </div>
           </div>
+          <button 
+            onClick={onLogout}
+            className="w-full mt-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2 border border-white/10"
+          >
+            <LogOut className="w-3 h-3" />
+            Logout
+          </button>
         </div>
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 custom-scrollbar">
-        <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
-          <div>
-            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight capitalize text-brand-900 font-serif">{activeTab}</h2>
-            <p className="text-slate-400 text-xs sm:text-sm">
-              Welcome back{activeTab === 'overview' && profile?.firstName ? `, ${profile.firstName} ${profile.lastName}` : ''}! Here's what's happening today.
-            </p>
-          </div>
-          <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-            <div className="relative flex-1 sm:flex-none">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Search sections..."
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setShowSearchSuggestions(true);
-                }}
-                onFocus={() => setShowSearchSuggestions(true)}
-                className="pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 w-full sm:w-64"
-              />
-              
-              <AnimatePresence>
-                {showSearchSuggestions && searchSuggestions.length > 0 && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: 10 }}
-                    className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-2xl border border-slate-100 z-[70] overflow-hidden"
-                  >
-                    {searchSuggestions.map(s => (
-                      <button
-                        key={s.id}
-                        onClick={() => {
-                          setActiveTab(s.tab as any);
-                          setSearchQuery('');
-                          setShowSearchSuggestions(false);
-                        }}
-                        className="w-full px-4 py-3 text-left hover:bg-slate-50 flex items-center gap-3 transition-colors"
-                      >
-                        <div className="w-8 h-8 rounded-lg bg-brand-50 flex items-center justify-center">
-                          <Search className="w-4 h-4 text-brand-600" />
-                        </div>
-                        <span className="text-sm font-medium text-slate-700">{s.label}</span>
-                      </button>
-                    ))}
-                  </motion.div>
-                )}
-              </AnimatePresence>
+      <main className="flex-1 overflow-y-auto px-4 sm:px-6 lg:px-8 pb-8 custom-scrollbar">
+        <header className="sticky top-0 z-40 bg-slate-50/80 backdrop-blur-md border-b border-slate-200/50 -mx-4 px-4 py-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 mb-8">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div className="flex justify-between items-center w-full sm:w-auto">
+            <div>
+              <h2 className="text-2xl sm:text-3xl font-bold tracking-tight capitalize text-brand-900 font-serif">{activeTab}</h2>
+              <div className="flex items-center gap-2 text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                Live • {new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+              </div>
             </div>
-            <button className="p-2 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all self-end sm:self-auto">
-              <Filter className="w-5 h-5 text-slate-400" />
+            {/* Mobile Sidebar Toggle */}
+            <button 
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className="lg:hidden p-3 bg-brand-900 text-white rounded-2xl shadow-lg shadow-brand-900/20 active:scale-95 transition-all"
+            >
+              {isSidebarOpen ? <XCircle className="w-5 h-5" /> : <LayoutDashboard className="w-5 h-5" />}
             </button>
+          </div>
+            <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto items-center">
+              <div className="relative flex-1 sm:flex-none w-full sm:w-auto">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search sections..."
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setShowSearchSuggestions(true);
+                  }}
+                  onFocus={() => setShowSearchSuggestions(true)}
+                  className="pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 w-full sm:w-64"
+                />
+                
+                <AnimatePresence>
+                  {showSearchSuggestions && searchSuggestions.length > 0 && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 10 }}
+                      className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-2xl border border-slate-100 z-[70] overflow-hidden"
+                    >
+                      {searchSuggestions.map(s => (
+                        <button
+                          key={s.id}
+                          onClick={() => {
+                            setActiveTab(s.tab as any);
+                            setSearchQuery('');
+                            setShowSearchSuggestions(false);
+                          }}
+                          className="w-full px-4 py-3 text-left hover:bg-slate-50 flex items-center gap-3 transition-colors"
+                        >
+                          <div className="w-8 h-8 rounded-lg bg-brand-50 flex items-center justify-center">
+                            <Search className="w-4 h-4 text-brand-600" />
+                          </div>
+                          <span className="text-sm font-medium text-slate-700">{s.label}</span>
+                        </button>
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+              <button className="p-2 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all self-end sm:self-auto">
+                <Filter className="w-5 h-5 text-slate-400" />
+              </button>
+
+              {/* Logged-in Info (Header) */}
+              <div className="flex items-center gap-2 sm:gap-3 pl-2 sm:pl-4 border-l border-slate-200">
+                <div className="hidden sm:block text-right">
+                  <p className="text-xs font-bold text-slate-900 truncate max-w-[120px]">
+                    {profile?.firstName} {profile?.lastName}
+                  </p>
+                  <p className="text-[9px] text-slate-400 uppercase tracking-widest">
+                    {profile?.roles?.[0] || 'Staff'}
+                  </p>
+                </div>
+                <div className="w-8 h-8 rounded-full bg-brand-900 text-white flex items-center justify-center font-bold text-xs shadow-lg shadow-brand-900/20">
+                  {profile?.firstName?.charAt(0) || 'S'}
+                </div>
+              </div>
+            </div>
           </div>
         </header>
 
@@ -635,14 +687,47 @@ export default function StaffDashboard({
                 <div className="lg:col-span-2 bg-white p-8 rounded-3xl border border-black/5 shadow-sm overflow-hidden">
                   <div className="flex justify-between items-center mb-8">
                     <h3 className="font-bold text-lg">Revenue & Bookings Trend</h3>
-                    <select 
-                      value={trendDays}
-                      onChange={(e) => setTrendDays(parseInt(e.target.value))}
-                      className="text-xs font-bold bg-black/5 border-none rounded-lg p-2 focus:ring-0 cursor-pointer"
-                    >
-                      <option value={7}>Last 7 Days</option>
-                      <option value={30}>Last 30 Days</option>
-                    </select>
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2">
+                        <button 
+                          onClick={() => {
+                            const financialData = [
+                              { category: 'Total Revenue', value: stats.totalRevenue },
+                              { category: 'Total Bookings', value: stats.totalBookings },
+                              { category: 'Today\'s Guests', value: stats.todayBookings },
+                              { category: 'Avg Party Size', value: stats.averageGuests }
+                            ];
+                            exportToCSV(financialData, `Financial_Summary_${new Date().toISOString().split('T')[0]}`);
+                          }}
+                          className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-all"
+                        >
+                          CSV
+                        </button>
+                        <button 
+                          onClick={() => {
+                            const headers = ['Metric', 'Value'];
+                            const data = [
+                              ['Total Revenue', formatCurrency(stats.totalRevenue)],
+                              ['Total Bookings', stats.totalBookings.toString()],
+                              ['Today\'s Guests', stats.todayBookings.toString()],
+                              ['Avg Party Size', stats.averageGuests.toString()]
+                            ];
+                            exportToPDF('Financial Summary', `Report generated on ${new Date().toLocaleDateString()}`, headers, data, `Financial_Report_${new Date().toISOString().split('T')[0]}`);
+                          }}
+                          className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-all"
+                        >
+                          PDF
+                        </button>
+                      </div>
+                      <select 
+                        value={trendDays}
+                        onChange={(e) => setTrendDays(parseInt(e.target.value))}
+                        className="text-xs font-bold bg-black/5 border-none rounded-lg p-2 focus:ring-0 cursor-pointer"
+                      >
+                        <option value={7}>Last 7 Days</option>
+                        <option value={30}>Last 30 Days</option>
+                      </select>
+                    </div>
                   </div>
                   <div className="h-[300px] w-full">
                     <ResponsiveContainer width="100%" height="100%">
@@ -684,21 +769,27 @@ export default function StaffDashboard({
                 <div className="bg-white p-8 rounded-3xl border border-black/5 shadow-sm">
                   <h3 className="font-bold text-lg mb-8">Popular Times</h3>
                   <div className="space-y-6">
-                    {['18:00', '19:00', '20:00', '21:00'].map((time, i) => (
-                      <div key={time} className="space-y-2">
-                        <div className="flex justify-between text-xs font-bold">
-                          <span className="text-black/40">{time}</span>
-                          <span>{Math.floor(Math.random() * 40 + 60)}%</span>
+                    {['18:00', '19:00', '20:00', '21:00'].map((time) => {
+                      const count = bookings.filter(b => b.time.startsWith(time.split(':')[0])).length;
+                      const maxCount = Math.max(...['18', '19', '20', '21'].map(t => bookings.filter(b => b.time.startsWith(t)).length), 1);
+                      const percentage = Math.round((count / maxCount) * 100);
+                      
+                      return (
+                        <div key={time} className="space-y-2">
+                          <div className="flex justify-between text-xs font-bold">
+                            <span className="text-black/40">{time}</span>
+                            <span>{percentage}%</span>
+                          </div>
+                          <div className="h-2 bg-black/5 rounded-full overflow-hidden">
+                            <motion.div 
+                              initial={{ width: 0 }}
+                              animate={{ width: `${percentage}%` }}
+                              className="h-full bg-black"
+                            />
+                          </div>
                         </div>
-                        <div className="h-2 bg-black/5 rounded-full overflow-hidden">
-                          <motion.div 
-                            initial={{ width: 0 }}
-                            animate={{ width: `${Math.floor(Math.random() * 40 + 60)}%` }}
-                            className="h-full bg-black"
-                          />
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -812,16 +903,43 @@ export default function StaffDashboard({
               exit={{ opacity: 0, x: -20 }}
               className="bg-white rounded-3xl border border-black/5 shadow-sm overflow-hidden"
             >
-              <div className="p-6 border-b border-black/5 flex justify-between items-center">
+              <div className="p-6 border-b border-black/5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <h3 className="font-bold text-lg">Food Orders</h3>
-                <div className="flex items-center gap-2">
-                  <CalendarIcon className="w-4 h-4 text-black/40" />
-                  <input 
-                    type="date" 
-                    value={selectedOrderDate}
-                    onChange={(e) => setSelectedOrderDate(e.target.value)}
-                    className="text-xs font-bold bg-black/5 border-none rounded-lg px-3 py-2 focus:ring-0"
-                  />
+                <div className="flex flex-wrap gap-2 items-center">
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={() => exportToCSV(filteredOrders, `Orders_${selectedOrderDate}`)}
+                      className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-all"
+                    >
+                      CSV
+                    </button>
+                    <button 
+                      onClick={() => {
+                        const headers = ['Order ID', 'Customer', 'Items', 'Total', 'Payment', 'Status'];
+                        const data = filteredOrders.map(o => [
+                          o.id.slice(-6).toUpperCase(),
+                          o.customerName,
+                          o.items.map(i => `${i.quantity}x ${menu.find(m => m.id === i.itemId)?.name || 'Unknown'}`).join(', '),
+                          formatCurrency(o.total),
+                          o.paymentMethod,
+                          o.status
+                        ]);
+                        exportToPDF('Food Orders', `Orders for ${selectedOrderDate}`, headers, data, `Orders_${selectedOrderDate}`);
+                      }}
+                      className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-all"
+                    >
+                      PDF
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <CalendarIcon className="w-4 h-4 text-black/40" />
+                    <input 
+                      type="date" 
+                      value={selectedOrderDate}
+                      onChange={(e) => setSelectedOrderDate(e.target.value)}
+                      className="text-xs font-bold bg-black/5 border-none rounded-lg px-3 py-2 focus:ring-0"
+                    />
+                  </div>
                 </div>
               </div>
               <div className="overflow-x-auto">
@@ -953,9 +1071,35 @@ export default function StaffDashboard({
               exit={{ opacity: 0, x: -20 }}
               className="bg-white rounded-3xl border border-black/5 shadow-sm overflow-hidden"
             >
-              <div className="p-6 border-b border-black/5 flex justify-between items-center">
+              <div className="p-6 border-b border-black/5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <h3 className="font-bold text-lg">All Reservations</h3>
-                <div className="flex gap-4 items-center">
+                <div className="flex flex-wrap gap-2 items-center">
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={() => exportToCSV(filteredBookings, `Bookings_${selectedDate}`)}
+                      className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-all"
+                    >
+                      CSV
+                    </button>
+                    <button 
+                      onClick={() => {
+                        const headers = ['ID', 'Customer', 'Date', 'Time', 'Guests', 'Table', 'Status'];
+                        const data = filteredBookings.map(b => [
+                          b.id,
+                          b.customerName,
+                          b.date,
+                          b.time,
+                          b.guests,
+                          b.tableId || 'N/A',
+                          b.status
+                        ]);
+                        exportToPDF('Reservations', `Bookings for ${selectedDate}`, headers, data, `Bookings_${selectedDate}`);
+                      }}
+                      className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-all"
+                    >
+                      PDF
+                    </button>
+                  </div>
                   <div className="flex items-center gap-2">
                     <CalendarIcon className="w-4 h-4 text-black/40" />
                     <input 
@@ -1146,11 +1290,7 @@ export default function StaffDashboard({
                                 <ChevronRight className="w-4 h-4" />
                               </button>
                               <button 
-                                onClick={() => {
-                                  if (confirm('Are you sure you want to delete this menu item?')) {
-                                    onDeleteMenuItem(item.id);
-                                  }
-                                }}
+                                onClick={() => setShowMenuDeleteConfirm(item.id)}
                                 className="p-2 hover:bg-red-50 text-red-600 rounded-xl transition-all"
                               >
                                 <Trash2 className="w-4 h-4" />
@@ -1183,9 +1323,33 @@ export default function StaffDashboard({
               exit={{ opacity: 0, x: -20 }}
               className="bg-white rounded-3xl border border-black/5 shadow-sm overflow-hidden"
             >
-              <div className="p-6 border-b border-black/5 flex justify-between items-center">
+              <div className="p-6 border-b border-black/5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <h3 className="font-bold text-lg">Digital Waitlist</h3>
-                <div className="flex gap-4 items-center">
+                <div className="flex flex-wrap gap-2 items-center">
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={() => exportToCSV(filteredWaitlist, `Waitlist_${selectedWaitlistDate}`)}
+                      className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-all"
+                    >
+                      CSV
+                    </button>
+                    <button 
+                      onClick={() => {
+                        const headers = ['Customer', 'Party Size', 'Phone', 'Wait Time', 'Status'];
+                        const data = filteredWaitlist.map(w => [
+                          w.customerName,
+                          w.partySize,
+                          w.phoneNumber || 'N/A',
+                          `${w.estimatedWaitTime} mins`,
+                          w.status
+                        ]);
+                        exportToPDF('Waitlist', `Waitlist for ${selectedWaitlistDate}`, headers, data, `Waitlist_${selectedWaitlistDate}`);
+                      }}
+                      className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-all"
+                    >
+                      PDF
+                    </button>
+                  </div>
                   <div className="flex items-center gap-2">
                     <CalendarIcon className="w-4 h-4 text-black/40" />
                     <input 
@@ -1448,14 +1612,39 @@ export default function StaffDashboard({
               className="space-y-6"
             >
               <div className="bg-white rounded-3xl border border-black/5 shadow-sm overflow-hidden">
-                <div className="p-6 border-b border-black/5 flex justify-between items-center">
+                <div className="p-6 border-b border-black/5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                   <h3 className="font-bold text-lg">Staff Directory</h3>
-                  <button 
-                    onClick={() => handleOpenEmployeeForm()}
-                    className="px-4 py-2 bg-black text-white rounded-xl text-xs font-bold flex items-center gap-2"
-                  >
-                    <Plus className="w-4 h-4" /> Add Employee
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={() => exportToCSV(employees, 'Staff_Directory')}
+                      className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-all"
+                    >
+                      CSV
+                    </button>
+                    <button 
+                      onClick={() => {
+                        const headers = ['Name', 'Email', 'Code', 'Designation', 'Roles', 'Status'];
+                        const data = employees.map(emp => [
+                          emp.name,
+                          emp.email,
+                          emp.employeeCode,
+                          emp.designation,
+                          Array.isArray(emp.roles) ? emp.roles.join(', ') : (emp as any).role || 'Employee',
+                          emp.active !== false ? 'Active' : 'Inactive'
+                        ]);
+                        exportToPDF('Staff Directory', 'Employee List', headers, data, 'Staff_Directory');
+                      }}
+                      className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-all"
+                    >
+                      PDF
+                    </button>
+                    <button 
+                      onClick={() => handleOpenEmployeeForm()}
+                      className="px-4 py-2 bg-black text-white rounded-xl text-xs font-bold flex items-center gap-2"
+                    >
+                      <Plus className="w-4 h-4" /> Add Employee
+                    </button>
+                  </div>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left">
@@ -1469,6 +1658,7 @@ export default function StaffDashboard({
                         <th className="px-6 py-4">Roles</th>
                         <th className="px-6 py-4">Status</th>
                         <th className="px-6 py-4">Created By</th>
+                        <th className="px-6 py-4 text-right">Last Login</th>
                         <th className="px-6 py-4 text-right">Actions</th>
                       </tr>
                     </thead>
@@ -1492,11 +1682,15 @@ export default function StaffDashboard({
                           <td className="px-6 py-4 text-xs font-medium">{emp.designation}</td>
                           <td className="px-6 py-4">
                             <div className="flex flex-wrap gap-1">
-                              {emp.roles.map(role => (
+                              {Array.isArray(emp.roles) ? emp.roles.map(role => (
                                 <span key={role} className="text-[8px] font-bold px-1.5 py-0.5 bg-black/5 rounded-full uppercase tracking-tighter">
                                   {role}
                                 </span>
-                              ))}
+                              )) : (
+                                <span className="text-[8px] font-bold px-1.5 py-0.5 bg-black/5 rounded-full uppercase tracking-tighter">
+                                  {(emp as any).role || 'Employee'}
+                                </span>
+                              )}
                             </div>
                           </td>
                           <td className="px-6 py-4">
@@ -1508,10 +1702,30 @@ export default function StaffDashboard({
                             </span>
                           </td>
                           <td className="px-6 py-4 text-xs text-black/40">#{emp.createdBy || 'N/A'}</td>
-                  <td className="px-6 py-4 text-right">
+                          <td className="px-6 py-4 text-right">
+                            <div className="flex flex-col items-end">
+                              <span className="text-[10px] font-bold text-brand-900">
+                                {emp.lastLoggedIn ? parseDate(emp.lastLoggedIn)?.toLocaleString(undefined, {
+                                  dateStyle: 'medium',
+                                  timeStyle: 'short'
+                                }) : 'Never'}
+                              </span>
+                              <span className="text-[8px] text-slate-400 uppercase tracking-widest">
+                                {emp.lastLoggedIn ? 'Last Active' : 'No Login History'}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 text-right">
                             {(() => {
+                              const isTargetAdmin = emp.roles.includes('Admin') || emp.roles.includes('Super Admin') || emp.employeeCode === '1111' || emp.employeeCode === '4444';
                               const isTargetSuperAdmin = emp.roles.includes('Super Admin') || emp.employeeCode === '1111';
-                              const canEdit = isSuperAdmin || (isAdmin && !isTargetSuperAdmin);
+                              
+                              let canEdit = isSuperAdmin || (isAdmin && !isTargetSuperAdmin);
+                              
+                              // Admin cannot edit other admins
+                              if (isAdmin4444 && isTargetAdmin && emp.employeeCode !== profile?.employeeCode) {
+                                canEdit = false;
+                              }
                               
                               if (!canEdit) return null;
                               if (profile?.roles?.some(r => ['Manager', 'Accountant'].includes(r)) && emp.employeeCode === profile.employeeCode && !isSuperAdmin) return null;
@@ -1537,6 +1751,47 @@ export default function StaffDashboard({
         </AnimatePresence>
 
         {/* Global Modals */}
+        <AnimatePresence>
+          {showMenuDeleteConfirm && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm"
+            >
+              <motion.div 
+                initial={{ scale: 0.9, y: 20 }}
+                animate={{ scale: 1, y: 0 }}
+                className="w-full max-w-md bg-white rounded-[2rem] p-8 shadow-2xl text-center"
+              >
+                <div className="w-16 h-16 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                  <Trash2 className="w-8 h-8" />
+                </div>
+                <h2 className="text-2xl font-bold mb-2 font-serif text-brand-900">Delete Menu Item?</h2>
+                <p className="text-slate-400 mb-8">Are you sure you want to delete this item from the menu? This action cannot be undone.</p>
+                <div className="flex gap-4">
+                  <button 
+                    onClick={() => setShowMenuDeleteConfirm(null)}
+                    className="flex-1 p-4 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={() => {
+                      onDeleteMenuItem(showMenuDeleteConfirm);
+                      setShowMenuDeleteConfirm(null);
+                      addToast('Menu item deleted successfully', 'success');
+                    }}
+                    className="flex-1 p-4 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-all shadow-lg shadow-red-600/20"
+                  >
+                    Yes, Delete
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         <AnimatePresence>
           {showDeleteConfirm && (
             <motion.div 
@@ -1651,10 +1906,24 @@ export default function StaffDashboard({
                     <input
                       type="text"
                       value={newWaitlistEntry.customerName}
-                      onChange={(e) => setNewWaitlistEntry({ ...newWaitlistEntry, customerName: e.target.value })}
-                      className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-brand-500 font-medium"
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (validateNoNumerics(val)) {
+                          setNewWaitlistEntry({ ...newWaitlistEntry, customerName: val });
+                          if (errors.waitlistName) {
+                            const newErrors = { ...errors };
+                            delete newErrors.waitlistName;
+                            setErrors(newErrors);
+                          }
+                        }
+                      }}
+                      className={cn(
+                        "w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 font-medium transition-all",
+                        errors.waitlistName ? "ring-2 ring-red-500 focus:ring-red-500" : "focus:ring-brand-500"
+                      )}
                       placeholder="Enter name"
                     />
+                    {errors.waitlistName && <p className="text-red-500 text-[10px] mt-1 font-bold">{errors.waitlistName}</p>}
                   </div>
 
                   <div>
@@ -1684,15 +1953,41 @@ export default function StaffDashboard({
                     <input
                       type="tel"
                       value={newWaitlistEntry.phoneNumber}
-                      onChange={(e) => setNewWaitlistEntry({ ...newWaitlistEntry, phoneNumber: e.target.value })}
-                      className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-brand-500 font-medium"
+                      onChange={(e) => {
+                        const formatted = formatPhoneNumber(e.target.value);
+                        setNewWaitlistEntry({ ...newWaitlistEntry, phoneNumber: formatted });
+                        if (errors.waitlistPhone) {
+                          const newErrors = { ...errors };
+                          delete newErrors.waitlistPhone;
+                          setErrors(newErrors);
+                        }
+                      }}
+                      className={cn(
+                        "w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 font-medium transition-all",
+                        errors.waitlistPhone ? "ring-2 ring-red-500 focus:ring-red-500" : "focus:ring-brand-500"
+                      )}
                       placeholder="(555) 000-0000"
                     />
+                    {errors.waitlistPhone && <p className="text-red-500 text-[10px] mt-1 font-bold">{errors.waitlistPhone}</p>}
                   </div>
 
                   <button
                     onClick={async () => {
                       if (!newWaitlistEntry.customerName) return;
+                      
+                      // Validation
+                      const newErrors: Record<string, string> = {};
+                      if (!validateNoNumerics(newWaitlistEntry.customerName)) newErrors.waitlistName = 'Name cannot contain numbers';
+                      if (newWaitlistEntry.phoneNumber && newWaitlistEntry.phoneNumber.replace(/[^\d]/g, '').length !== 10) {
+                        newErrors.waitlistPhone = 'Phone number must be 10 digits';
+                      }
+                      
+                      if (Object.keys(newErrors).length > 0) {
+                        setErrors(newErrors);
+                        addToast('Please fix the errors in the form.', 'error');
+                        return;
+                      }
+
                       setFormLoading(true);
                       const entryId = Math.random().toString(36).substr(2, 9);
                       const entryData = {
@@ -1754,9 +2049,23 @@ export default function StaffDashboard({
                       type="text"
                       required
                       value={newEmployee.firstName}
-                      onChange={(e) => setNewEmployee({...newEmployee, firstName: e.target.value})}
-                      className="w-full p-4 bg-slate-50 rounded-xl border-none focus:ring-2 focus:ring-black transition-all"
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (validateNoNumerics(val)) {
+                          setNewEmployee({...newEmployee, firstName: val});
+                          if (errors.firstName) {
+                            const newErrors = { ...errors };
+                            delete newErrors.firstName;
+                            setErrors(newErrors);
+                          }
+                        }
+                      }}
+                      className={cn(
+                        "w-full p-4 bg-slate-50 rounded-xl border-none focus:ring-2 transition-all",
+                        errors.firstName ? "ring-2 ring-red-500 focus:ring-red-500" : "focus:ring-black"
+                      )}
                     />
+                    {errors.firstName && <p className="text-red-500 text-[10px] mt-1 font-bold">{errors.firstName}</p>}
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Last Name</label>
@@ -1764,27 +2073,65 @@ export default function StaffDashboard({
                       type="text"
                       required
                       value={newEmployee.lastName}
-                      onChange={(e) => setNewEmployee({...newEmployee, lastName: e.target.value})}
-                      className="w-full p-4 bg-slate-50 rounded-xl border-none focus:ring-2 focus:ring-black transition-all"
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (validateNoNumerics(val)) {
+                          setNewEmployee({...newEmployee, lastName: val});
+                          if (errors.lastName) {
+                            const newErrors = { ...errors };
+                            delete newErrors.lastName;
+                            setErrors(newErrors);
+                          }
+                        }
+                      }}
+                      className={cn(
+                        "w-full p-4 bg-slate-50 rounded-xl border-none focus:ring-2 transition-all",
+                        errors.lastName ? "ring-2 ring-red-500 focus:ring-red-500" : "focus:ring-black"
+                      )}
                     />
+                    {errors.lastName && <p className="text-red-500 text-[10px] mt-1 font-bold">{errors.lastName}</p>}
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Email</label>
                     <input
                       type="email"
                       value={newEmployee.email}
-                      onChange={(e) => setNewEmployee({...newEmployee, email: e.target.value})}
-                      className="w-full p-4 bg-slate-50 rounded-xl border-none focus:ring-2 focus:ring-black transition-all"
+                      onChange={(e) => {
+                        setNewEmployee({...newEmployee, email: e.target.value});
+                        if (errors.email) {
+                          const newErrors = { ...errors };
+                          delete newErrors.email;
+                          setErrors(newErrors);
+                        }
+                      }}
+                      className={cn(
+                        "w-full p-4 bg-slate-50 rounded-xl border-none focus:ring-2 transition-all",
+                        errors.email ? "ring-2 ring-red-500 focus:ring-red-500" : "focus:ring-black"
+                      )}
                     />
+                    {errors.email && <p className="text-red-500 text-[10px] mt-1 font-bold">{errors.email}</p>}
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Phone</label>
                     <input
                       type="tel"
                       value={newEmployee.phone}
-                      onChange={(e) => setNewEmployee({...newEmployee, phone: e.target.value})}
-                      className="w-full p-4 bg-slate-50 rounded-xl border-none focus:ring-2 focus:ring-black transition-all"
+                      onChange={(e) => {
+                        const formatted = formatPhoneNumber(e.target.value);
+                        setNewEmployee({...newEmployee, phone: formatted});
+                        if (errors.phone) {
+                          const newErrors = { ...errors };
+                          delete newErrors.phone;
+                          setErrors(newErrors);
+                        }
+                      }}
+                      placeholder="(555) 000-0000"
+                      className={cn(
+                        "w-full p-4 bg-slate-50 rounded-xl border-none focus:ring-2 transition-all",
+                        errors.phone ? "ring-2 ring-red-500 focus:ring-red-500" : "focus:ring-black"
+                      )}
                     />
+                    {errors.phone && <p className="text-red-500 text-[10px] mt-1 font-bold">{errors.phone}</p>}
                   </div>
                   <div className="md:col-span-2">
                     <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Address</label>

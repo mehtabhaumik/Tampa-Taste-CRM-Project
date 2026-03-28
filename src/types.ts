@@ -45,6 +45,7 @@ export interface UserProfile {
   lastName?: string;
   displayName?: string;
   phoneNumber?: string;
+  lastLoggedIn?: any;
 }
 
 export interface LoyaltyTransaction {
@@ -111,4 +112,5 @@ export interface Employee {
   active: boolean;
   createdBy?: string;
   createdAt?: any;
+  lastLoggedIn?: any;
 }

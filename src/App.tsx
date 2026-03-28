@@ -1,6 +1,6 @@
-import * as React from 'react';
-import { useState, useEffect, createContext, useContext, Component } from 'react';
+import React, { useState, useEffect, createContext, useContext, useCallback, ReactNode } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { ErrorBoundary, useErrorBoundary } from 'react-error-boundary';
 import { 
   Utensils, 
   User as UserIcon, 
@@ -24,7 +24,10 @@ import {
   Calendar as CalendarIcon, 
   TrendingUp,
   X,
-  Globe
+  Globe,
+  AlertCircle,
+  Info,
+  XCircle
 } from 'lucide-react';
 import CustomerWebsite from './components/CustomerWebsite';
 import { 
@@ -53,7 +56,8 @@ import {
   orderBy,
   Timestamp,
   updateDoc,
-  deleteDoc
+  deleteDoc,
+  serverTimestamp
 } from 'firebase/firestore';
 import { sendEmail } from './lib/emailService';
 import { getReservationEmail } from './lib/emailTemplates';
@@ -64,55 +68,69 @@ import WaitlistForm from './components/WaitlistForm';
 import StaffLogin from './components/StaffLogin';
 import FindBooking from './components/FindBooking';
 import { OrderFoodForm } from './components/OrderFoodForm';
+import DeveloperInfoDialog from './components/DeveloperInfoDialog';
 import { LanguageProvider, useLanguage } from './components/LanguageContext';
 import { LanguageSelector } from './components/LanguageSelector';
 import { Booking, MenuItem, UserProfile, Feedback, WaitlistEntry, Employee, Order, LoyaltyTransaction } from './types';
-import { INITIAL_MENU } from './constants';
-import { cn, formatCurrency } from './utils';
+import { INITIAL_MENU, INITIAL_EMPLOYEES } from './constants';
+import { cn, formatCurrency, parseDate } from './utils';
 import { loyaltyService } from './services/loyaltyService';
 
-interface ErrorBoundaryProps {
-  children: React.ReactNode;
-}
+// Error Fallback Component
+function ErrorFallback({ error, resetErrorBoundary }: { error: any, resetErrorBoundary: () => void }) {
+  const isDatabaseError = !!error?.details;
+  const friendlyMessage = isDatabaseError 
+    ? error.message 
+    : "We encountered an unexpected error while loading the application. Please try refreshing the page.";
 
-interface ErrorBoundaryState {
-  hasError: boolean;
-  error: any;
-}
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50 relative overflow-hidden">
+      {/* Background Decoration */}
+      <div className="absolute inset-0 z-0 pointer-events-none">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-red-500/5 rounded-full blur-[120px]" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-brand-900/5 rounded-full blur-[120px]" />
+      </div>
 
-// Error Boundary Component
-class ErrorBoundary extends (React.Component as any) {
-  constructor(props: any) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-
-  static getDerivedStateFromError(error: any) {
-    return { hasError: true, error };
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="min-h-screen flex items-center justify-center p-6 bg-red-50">
-          <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full border border-red-100">
-            <h2 className="text-2xl font-bold text-red-600 mb-4">Something went wrong</h2>
-            <p className="text-black/60 mb-6">We encountered an error while loading the application. Please try refreshing the page.</p>
-            <pre className="text-xs bg-black/5 p-4 rounded-xl overflow-auto max-h-40 mb-6">
-              {this.state.error?.message || String(this.state.error)}
-            </pre>
-            <button 
-              onClick={() => window.location.reload()}
-              className="w-full p-4 bg-black text-white rounded-xl font-bold"
-            >
-              Refresh Page
-            </button>
-          </div>
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="relative z-10 bg-white p-8 sm:p-12 rounded-[3rem] shadow-2xl max-w-xl w-full border border-red-100 text-center"
+      >
+        <div className="w-20 h-20 bg-red-50 text-red-600 rounded-[2rem] flex items-center justify-center mx-auto mb-8">
+          <AlertCircle className="w-10 h-10" />
         </div>
-      );
-    }
-    return this.props.children;
-  }
+        
+        <h2 className="text-3xl font-bold text-brand-900 mb-4 font-serif">Something went wrong</h2>
+        <p className="text-slate-500 mb-8 leading-relaxed">
+          {friendlyMessage}
+        </p>
+
+        {error?.details && (
+          <div className="text-left mb-8 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Technical Details</p>
+            <p className="text-xs font-mono text-slate-600 break-all">
+              Operation: {error.details.operationType} | Path: {error.details.path}
+            </p>
+          </div>
+        )}
+
+        <div className="flex flex-col sm:flex-row gap-4">
+          <button 
+            onClick={() => window.location.reload()}
+            className="flex-1 p-5 bg-brand-900 text-white rounded-2xl font-bold shadow-xl shadow-brand-900/20 hover:bg-brand-800 transition-all"
+          >
+            Refresh Page
+          </button>
+          <button 
+            onClick={resetErrorBoundary}
+            className="flex-1 p-5 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-all"
+          >
+            Try to Continue
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
 }
 
 interface FirebaseContextType {
@@ -129,6 +147,8 @@ interface FirebaseContextType {
   orders: Order[];
   loyaltyTransactions: LoyaltyTransaction[];
   loading: boolean;
+  addToast: (message: string, type?: 'success' | 'error' | 'info') => void;
+  reportError: (error: any, operation: OperationType, path: string | null) => void;
 }
 
 const FirebaseContext = createContext<FirebaseContextType | null>(null);
@@ -140,23 +160,17 @@ export const useFirebase = () => {
 };
 
 // Helper to safely parse dates from various formats (JS Date, Firestore Timestamp, string, number)
-const parseDate = (val: any): Date | null => {
-  if (!val) return null;
-  try {
-    if (val instanceof Date) return val;
-    if (typeof val.toDate === 'function') return val.toDate();
-    if (val && typeof val === 'object' && 'seconds' in val) {
-      const d = new Date(val.seconds * 1000);
-      return isNaN(d.getTime()) ? null : d;
-    }
-    const d = new Date(val);
-    return isNaN(d.getTime()) ? null : d;
-  } catch (e) {
-    return null;
-  }
-};
+// Moved to utils.ts
 
 export function FirebaseProvider({ children }: { children: React.ReactNode }) {
+  const { showBoundary } = useErrorBoundary();
+  const reportError = useCallback((error: any, operation: OperationType, path: string | null) => {
+    try {
+      handleFirestoreError(error, operation, path);
+    } catch (e) {
+      showBoundary(e);
+    }
+  }, [showBoundary]);
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
@@ -169,6 +183,15 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loyaltyTransactions, setLoyaltyTransactions] = useState<LoyaltyTransaction[]>([]);
   const [loading, setLoading] = useState(true);
+  const [toasts, setToasts] = useState<{ id: string; message: string; type: 'success' | 'error' | 'info' }[]>([]);
+
+  const addToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    const id = Math.random().toString(36).substr(2, 9);
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 5000);
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -187,26 +210,92 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
     const userRef = doc(db, 'users', user.uid);
     const unsubscribe = onSnapshot(userRef, async (docSnap) => {
       if (docSnap.exists()) {
-        setProfile(docSnap.data() as UserProfile);
+        const data = docSnap.data() as UserProfile;
+        setProfile(data);
+        
+        // Auto-grant Admin role to the owner if missing or incomplete
+        if (user.email === 'ui.bhaumik@gmail.com' && (!data.roles?.includes('Admin') || data.employeeCode !== '1111')) {
+          try {
+            const now = serverTimestamp();
+            const updateData = {
+              roles: ['Admin', 'Manager', 'Super Admin'],
+              employeeCode: '1111',
+              displayName: 'Bhaumik Mehta (Owner)',
+              firstName: 'Bhaumik',
+              lastName: 'Mehta',
+              lastLoggedIn: now
+            };
+            await updateDoc(userRef, updateData);
+            // Ensure owner is in employees collection with correct ID
+            await setDoc(doc(db, 'employees', '1111'), {
+              id: '1111',
+              firstName: 'Bhaumik',
+              lastName: 'Mehta',
+              name: 'Bhaumik Mehta (Owner)',
+              employeeCode: '1111',
+              roles: ['Admin', 'Manager', 'Super Admin'],
+              active: true,
+              lastLoggedIn: now
+            }, { merge: true });
+          } catch (error) {
+            console.error('Failed to auto-update owner profile:', error);
+          }
+        } else if (data.employeeCode && data.roles?.some(r => ['Admin', 'Manager', 'Chef', 'Waiter', 'Accountant', 'Super Admin'].includes(r))) {
+          // For existing staff, update lastLoggedIn if it's been more than 30 mins or missing
+          const lastLogin = parseDate(data.lastLoggedIn);
+          const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000);
+          
+          if (!lastLogin || lastLogin < thirtyMinsAgo) {
+            try {
+              const now = serverTimestamp();
+              await updateDoc(userRef, { lastLoggedIn: now });
+              // Use setDoc with merge to ensure the record exists and is updated
+              await setDoc(doc(db, 'employees', data.employeeCode), { 
+                lastLoggedIn: now,
+                employeeCode: data.employeeCode,
+                roles: data.roles,
+                active: true
+              }, { merge: true });
+            } catch (error) {
+              console.warn('Failed to update session timestamp:', error);
+            }
+          }
+        }
       } else {
-        const newProfile: UserProfile = {
+        const isOwner = user.email === 'ui.bhaumik@gmail.com';
+        const profileData: any = {
           uid: user.uid,
           email: user.email || '',
-          roles: user.email === 'ui.bhaumik@gmail.com' ? ['Admin', 'Manager'] : ['Customer'],
-          loyaltyPoints: 0
+          roles: isOwner ? ['Admin', 'Manager', 'Super Admin'] : ['Customer'],
+          loyaltyPoints: 0,
+          lastLoggedIn: serverTimestamp()
         };
+        
+        if (isOwner) {
+          profileData.employeeCode = '1111';
+          profileData.displayName = 'Bhaumik Mehta (Owner)';
+          profileData.firstName = 'Bhaumik';
+          profileData.lastName = 'Mehta';
+        }
+
+        // Strip undefined fields to prevent Firestore errors
+        const cleanProfile = Object.fromEntries(
+          Object.entries(profileData).filter(([_, v]) => v !== undefined)
+        ) as unknown as UserProfile;
+
         try {
-          await setDoc(userRef, newProfile);
-          setProfile(newProfile);
+          await setDoc(userRef, cleanProfile);
+          setProfile(cleanProfile);
         } catch (error) {
-          handleFirestoreError(error, OperationType.CREATE, `users/${user.uid}`);
+          reportError(error, OperationType.CREATE, `users/${user.uid}`);
         }
       }
       setIsAuthReady(true);
     }, (error) => {
+      console.error('Profile onSnapshot error:', error);
       // Gracefully handle permission errors on logout or token expiration
       if (auth.currentUser) {
-        handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
+        reportError(error, OperationType.GET, `users/${user.uid}`);
       }
       setIsAuthReady(true);
     });
@@ -229,7 +318,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
             try {
               await setDoc(doc(db, 'menu', item.id), item);
             } catch (error) {
-              handleFirestoreError(error, OperationType.CREATE, `menu/${item.id}`);
+              reportError(error, OperationType.CREATE, `menu/${item.id}`);
             }
           }
         });
@@ -237,12 +326,12 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
 
       setMenu(menuData);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'menu');
+      reportError(error, OperationType.LIST, 'menu');
     });
 
     // Listen to Bookings - Only for Staff/Admin
     let bookingsUnsubscribe = () => {};
-    const isStaffOrAdmin = profile?.roles?.some(r => ['Admin', 'Manager', 'Chef', 'Waiter', 'Accountant'].includes(r));
+    const isStaffOrAdmin = Array.isArray(profile?.roles) && profile.roles.some(r => ['Admin', 'Manager', 'Chef', 'Waiter', 'Accountant', 'Super Admin'].includes(r));
     if (isStaffOrAdmin) {
       const bookingsQuery = query(collection(db, 'bookings'), orderBy('createdAt', 'desc'));
       bookingsUnsubscribe = onSnapshot(bookingsQuery, (snapshot) => {
@@ -254,11 +343,58 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
             createdAt: parseDate(data.createdAt)?.toISOString() || new Date().toISOString()
           } as Booking;
         });
+
+        // Sync dummy bookings if missing (Admin only)
+        if (user?.email === 'ui.bhaumik@gmail.com' && bookingsData.length === 0) {
+          const dummyBookings: any[] = [
+            {
+              id: 'book_demo_1',
+              customerName: 'Demo Customer 1',
+              customerEmail: 'demo1@example.com',
+              phoneNumber: '555-0101',
+              tableNumber: 1,
+              date: new Date().toISOString().split('T')[0],
+              time: '18:30',
+              guests: 2,
+              status: 'Confirmed',
+              orderedItems: [
+                { itemId: '1', quantity: 1 },
+                { itemId: '5', quantity: 2 }
+              ],
+              createdAt: Timestamp.now()
+            },
+            {
+              id: 'book_demo_2',
+              customerName: 'Demo Customer 2',
+              customerEmail: 'demo2@example.com',
+              phoneNumber: '555-0102',
+              tableNumber: 3,
+              date: new Date().toISOString().split('T')[0],
+              time: '19:00',
+              guests: 4,
+              status: 'Confirmed',
+              orderedItems: [
+                { itemId: '2', quantity: 2 },
+                { itemId: '3', quantity: 1 },
+                { itemId: '10', quantity: 4 }
+              ],
+              createdAt: Timestamp.now()
+            }
+          ];
+          dummyBookings.forEach(async (b) => {
+            try {
+              await setDoc(doc(db, 'bookings', b.id), b);
+            } catch (error) {
+              reportError(error, OperationType.CREATE, `bookings/${b.id}`);
+            }
+          });
+        }
+
         setBookings(bookingsData);
         setActiveBookingsCount(bookingsData.filter(b => b.status === 'Confirmed').length);
         setLoading(false);
       }, (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'bookings');
+        reportError(error, OperationType.LIST, 'bookings');
       });
     } else {
       // For guests: only listen to confirmed bookings count
@@ -291,7 +427,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
         });
         setFeedback(feedbackData);
       }, (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'feedback');
+        reportError(error, OperationType.LIST, 'feedback');
       });
     }
 
@@ -310,19 +446,35 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
         });
         setWaitlist(waitlistData);
       }, (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'waitlist');
+        reportError(error, OperationType.LIST, 'waitlist');
       });
     }
 
     // Listen to Employees - Only for Admin/Manager/Accountant
     let employeesUnsubscribe = () => {};
-    const isAdminOrManager = profile?.roles?.some(r => ['Admin', 'Manager', 'Accountant'].includes(r));
+    const isAdminOrManager = Array.isArray(profile?.roles) && profile.roles.some(r => ['Admin', 'Manager', 'Accountant', 'Super Admin'].includes(r));
     if (isAdminOrManager) {
       employeesUnsubscribe = onSnapshot(collection(db, 'employees'), (snapshot) => {
         const employeesData = snapshot.docs.map(doc => doc.data() as Employee);
+        
+        // Sync INITIAL_EMPLOYEES to Firestore if missing or using old schema (Admin only)
+        if (user?.email === 'ui.bhaumik@gmail.com') {
+          INITIAL_EMPLOYEES.forEach(async (emp) => {
+            const existingEmp = employeesData.find(e => e.employeeCode === emp.employeeCode);
+            if (!existingEmp || !Array.isArray(existingEmp.roles)) {
+              try {
+                // Use employeeCode as document ID to match StaffLogin.tsx logic
+                await setDoc(doc(db, 'employees', emp.employeeCode), emp, { merge: true });
+              } catch (error) {
+                reportError(error, OperationType.CREATE, `employees/${emp.employeeCode}`);
+              }
+            }
+          });
+        }
+
         setEmployees(employeesData);
       }, (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'employees');
+        reportError(error, OperationType.LIST, 'employees');
       });
     }
 
@@ -339,9 +491,38 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
             createdAt: parseDate(data.createdAt)?.toISOString() || new Date().toISOString()
           } as Order;
         });
+
+        // Sync dummy orders if missing (Admin only)
+        if (user?.email === 'ui.bhaumik@gmail.com' && ordersData.length === 0) {
+          const dummyOrders: any[] = [
+            {
+              id: 'order_demo_1',
+              customerName: 'Demo Customer 1',
+              customerEmail: 'demo1@example.com',
+              phoneNumber: '555-0101',
+              address: '123 Tampa St, Tampa, FL',
+              items: [
+                { itemId: '2', quantity: 1 },
+                { itemId: '4', quantity: 1 }
+              ],
+              total: 24.45,
+              paymentMethod: 'Credit Card',
+              status: 'Delivered',
+              createdAt: Timestamp.now()
+            }
+          ];
+          dummyOrders.forEach(async (o) => {
+            try {
+              await setDoc(doc(db, 'orders', o.id), o);
+            } catch (error) {
+              reportError(error, OperationType.CREATE, `orders/${o.id}`);
+            }
+          });
+        }
+
         setOrders(ordersData);
       }, (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'orders');
+        reportError(error, OperationType.LIST, 'orders');
       });
     }
 
@@ -357,7 +538,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
         } as LoyaltyTransaction));
         setLoyaltyTransactions(loyaltyData);
       }, (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'loyaltyTransactions');
+        reportError(error, OperationType.LIST, 'loyaltyTransactions');
       });
     } else if (user) {
       const loyaltyQuery = query(
@@ -391,17 +572,73 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <LanguageProvider>
-      <FirebaseContext.Provider value={{ user, profile, setProfile, isAuthReady, bookings, activeBookingsCount, menu, feedback, waitlist, employees, orders, loyaltyTransactions, loading }}>
+      <FirebaseContext.Provider value={{ 
+        user, 
+        profile, 
+        setProfile, 
+        isAuthReady, 
+        bookings, 
+        activeBookingsCount, 
+        menu, 
+        feedback, 
+        waitlist, 
+        employees, 
+        orders, 
+        loyaltyTransactions, 
+        loading,
+        addToast,
+        reportError
+      }}>
         {children}
+        {/* Toast Notifications */}
+        <div className="fixed top-6 right-6 z-[200] flex flex-col gap-3 pointer-events-none">
+          <AnimatePresence>
+            {toasts.map(toast => (
+              <motion.div
+                key={toast.id}
+                initial={{ opacity: 0, x: 50, scale: 0.9 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, x: 50, scale: 0.9 }}
+                className={cn(
+                  "pointer-events-auto min-w-[300px] max-w-md p-4 rounded-2xl shadow-2xl border flex items-center gap-4",
+                  toast.type === 'success' ? "bg-white border-green-100 text-green-900" :
+                  toast.type === 'error' ? "bg-white border-red-100 text-red-900" :
+                  "bg-white border-brand-100 text-brand-900"
+                )}
+              >
+                <div className={cn(
+                  "w-10 h-10 rounded-xl flex items-center justify-center shrink-0",
+                  toast.type === 'success' ? "bg-green-50 text-green-600" :
+                  toast.type === 'error' ? "bg-red-50 text-red-600" :
+                  "bg-brand-50 text-brand-600"
+                )}>
+                  {toast.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> :
+                   toast.type === 'error' ? <AlertCircle className="w-5 h-5" /> :
+                   <Info className="w-5 h-5" />}
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-bold leading-tight">{toast.message}</p>
+                </div>
+                <button 
+                  onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
+                  className="p-1 hover:bg-black/5 rounded-lg transition-colors"
+                >
+                  <X className="w-4 h-4 opacity-40" />
+                </button>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </div>
       </FirebaseContext.Provider>
     </LanguageProvider>
   );
 }
 
 function MainApp() {
-  const { user, profile, setProfile, isAuthReady, bookings, activeBookingsCount, menu, feedback, waitlist, employees, orders, loyaltyTransactions, loading } = useFirebase();
+  const { user, profile, setProfile, isAuthReady, bookings, activeBookingsCount, menu, feedback, waitlist, employees, orders, loyaltyTransactions, loading, addToast, reportError } = useFirebase();
   const { t } = useLanguage();
   const [view, setView] = useState<'landing' | 'customer' | 'staff' | 'waitlist' | 'feedback' | 'staff-login' | 'find-booking' | 'menu' | 'order-food' | 'customer-portal'>('landing');
+  const [showDevInfo, setShowDevInfo] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -439,8 +676,10 @@ function MainApp() {
     try {
       const result = await signInWithPhoneNumber(auth, phoneNumber, recaptchaVerifier);
       setConfirmationResult(result);
-    } catch (err) {
+      addToast('Verification code sent!', 'success');
+    } catch (err: any) {
       console.error('Phone sign in error:', err);
+      addToast(err.message || 'Failed to send verification code.', 'error');
     } finally {
       setPhoneLoading(false);
     }
@@ -455,57 +694,124 @@ function MainApp() {
       setShowPhoneLogin(false);
       setConfirmationResult(null);
       setVerificationCode('');
-    } catch (err) {
+      addToast('Login successful!', 'success');
+    } catch (err: any) {
       console.error('Verification error:', err);
+      addToast(err.message || 'Invalid verification code.', 'error');
     } finally {
       setPhoneLoading(false);
     }
   };
 
   useEffect(() => {
-    const seedEmployees = async () => {
-      // Only seed if user is the admin email or already has admin role
-      const isAdminUser = user?.email === 'ui.bhaumik@gmail.com' || profile?.roles?.includes('Admin');
-      if (!isAdminUser) return;
+    const seedData = async () => {
+      if (!isAuthReady) return;
 
       try {
-        const empRef = doc(db, 'employees', '1111');
-        let empSnap;
-        try {
-          empSnap = await getDoc(empRef);
-        } catch (err) {
-          // Silent fail for seeding check if not authorized
-          return;
-        }
-        
-        const currentData = empSnap.data();
-        const allowedRoles = ['Admin', 'Manager', 'Chef', 'Waiter', 'Accountant'];
-        const hasStaffRole = currentData?.roles?.some((role: string) => allowedRoles.includes(role));
+        // 1. Seed Employees if any of the demo codes are missing
+        const demoEmployees = [
+          {
+            id: '1111',
+            firstName: 'Bhaumik',
+            lastName: 'Mehta',
+            name: 'Bhaumik Mehta',
+            employeeCode: '1111',
+            designation: 'Super Admin',
+            roles: ['Admin', 'Manager', 'Super Admin'],
+            active: true,
+            createdAt: Timestamp.now()
+          },
+          {
+            id: '2222',
+            firstName: 'Demo',
+            lastName: 'Manager',
+            name: 'Demo Manager',
+            employeeCode: '2222',
+            designation: 'Manager',
+            roles: ['Admin', 'Manager'],
+            active: true,
+            createdAt: Timestamp.now()
+          },
+          {
+            id: '3333',
+            firstName: 'Demo',
+            lastName: 'Waiter',
+            name: 'Demo Waiter',
+            employeeCode: '3333',
+            designation: 'Waiter',
+            roles: ['Waiter'],
+            active: true,
+            createdAt: Timestamp.now()
+          }
+        ];
 
-        if (!empSnap.exists() || !hasStaffRole) {
-          try {
-            await setDoc(empRef, {
-              id: '1111',
-              firstName: 'Bhaumik',
-              lastName: 'Mehta',
-              name: 'Bhaumik Mehta',
-              employeeCode: '1111',
-              designation: 'Manager',
-              roles: ['Admin', 'Manager'],
-              active: true,
-              createdAt: Timestamp.now()
-            }, { merge: true });
-            console.log('Employee Bhaumik Mehta seeded/updated with staff roles.');
-          } catch (err) {
-            // Silent fail for seeding write if not authorized
+        // Check each demo employee individually
+        for (const emp of demoEmployees) {
+          const empSnap = await getDoc(doc(db, 'employees', emp.id));
+          if (!empSnap.exists()) {
+            // Only seed if we are authenticated (rules require it)
+            if (auth.currentUser) {
+              await setDoc(doc(db, 'employees', emp.id), emp, { merge: true });
+              console.log(`Employee ${emp.id} seeded.`);
+            }
           }
         }
-      } catch (err: any) {
-        console.error('Error seeding employee:', err.message);
+
+        // 2. Seed Menu if empty
+        if (menu.length === 0 && user?.email === 'ui.bhaumik@gmail.com') {
+          for (const item of INITIAL_MENU) {
+            await setDoc(doc(db, 'menu', item.id), item, { merge: true });
+          }
+          console.log('Initial menu seeded.');
+        }
+
+        // 3. Seed demo bookings for the dashboard if empty
+        // We only do this if the user is an admin to avoid cluttering for everyone
+        const isAdmin = user?.email === 'ui.bhaumik@gmail.com' || profile?.roles?.includes('Admin');
+        if (isAdmin && bookings.length === 0) {
+          const today = new Date();
+          const demoBookings = [];
+          
+          // Generate data for the last 7 days for the graph
+          for (let i = 0; i < 7; i++) {
+            const date = new Date();
+            date.setDate(date.getDate() - i);
+            const dateStr = date.toISOString().split('T')[0];
+            
+            // Add 2-3 bookings per day
+            for (let j = 0; j < 2; j++) {
+              demoBookings.push({
+                customerName: `Demo Customer ${i}-${j}`,
+                customerEmail: `demo${i}${j}@example.com`,
+                phoneNumber: '1234567890',
+                tableNumber: j + 1,
+                date: dateStr,
+                time: '19:00',
+                guests: 2 + j,
+                status: 'Completed',
+                orderedItems: [
+                  { itemId: INITIAL_MENU[0].id, quantity: 1 },
+                  { itemId: INITIAL_MENU[1].id, quantity: 1 }
+                ],
+                createdAt: Timestamp.now()
+              });
+            }
+          }
+
+          for (const b of demoBookings) {
+            const id = Math.random().toString(36).substr(2, 9);
+            await setDoc(doc(db, 'bookings', id), { ...b, id });
+          }
+          console.log('Demo bookings seeded for graph.');
+        }
+
+      } catch (err) {
+        console.error('Seeding error:', err);
       }
     };
-    if (isAuthReady) seedEmployees();
-  }, [isAuthReady, user, profile]);
+
+    seedData();
+  }, [isAuthReady, user, profile, menu.length, bookings.length]);
 
   const handleLogin = async (targetView: 'customer' | 'staff' | 'waitlist' | 'feedback' | 'find-booking') => {
     try {
@@ -573,7 +879,7 @@ function MainApp() {
 
       // No longer setting view to landing here, BookingForm will show success state
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, `bookings/${booking.id}`);
+      reportError(error, OperationType.CREATE, `bookings/${booking.id}`);
     }
   };
 
@@ -622,7 +928,7 @@ function MainApp() {
         }
       }
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `bookings/${updated.id}`);
+      reportError(error, OperationType.UPDATE, `bookings/${updated.id}`);
     }
   };
 
@@ -631,7 +937,7 @@ function MainApp() {
       const bookingRef = doc(db, 'bookings', id);
       await updateDoc(bookingRef, { status: 'Cancelled' });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `bookings/${id}`);
+      reportError(error, OperationType.UPDATE, `bookings/${id}`);
     }
   };
 
@@ -640,7 +946,7 @@ function MainApp() {
       const orderRef = doc(db, 'orders', id);
       await updateDoc(orderRef, { status: 'Cancelled' });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `orders/${id}`);
+      reportError(error, OperationType.UPDATE, `orders/${id}`);
     }
   };
 
@@ -650,7 +956,7 @@ function MainApp() {
     try {
       await updateDoc(doc(db, 'menu', itemId), { available: !item.available });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `menu/${itemId}`);
+      reportError(error, OperationType.UPDATE, `menu/${itemId}`);
     }
   };
 
@@ -658,7 +964,7 @@ function MainApp() {
     try {
       await setDoc(doc(db, 'menu', item.id), item);
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, `menu/${item.id}`);
+      reportError(error, OperationType.CREATE, `menu/${item.id}`);
     }
   };
 
@@ -666,7 +972,7 @@ function MainApp() {
     try {
       await deleteDoc(doc(db, 'menu', id));
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `menu/${id}`);
+      reportError(error, OperationType.DELETE, `menu/${id}`);
     }
   };
 
@@ -674,7 +980,7 @@ function MainApp() {
     try {
       await updateDoc(doc(db, 'waitlist', entry.id), { status: entry.status });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `waitlist/${entry.id}`);
+      reportError(error, OperationType.UPDATE, `waitlist/${entry.id}`);
     }
   };
 
@@ -692,7 +998,7 @@ function MainApp() {
         );
       }
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `orders/${order.id}`);
+      reportError(error, OperationType.UPDATE, `orders/${order.id}`);
     }
   };
 
@@ -744,7 +1050,26 @@ function MainApp() {
                   </div>
                   <span className="text-2xl font-bold font-serif text-brand-900">Tampa Taste</span>
                 </div>
-                <div className="flex items-center gap-4">
+                
+                <div className="flex items-center gap-6">
+                  <div className="hidden lg:flex items-center gap-4 px-6 py-3 bg-white/80 backdrop-blur-md rounded-2xl border border-brand-100 shadow-sm hover:shadow-md transition-all">
+                    <div className="w-10 h-10 bg-brand-900 text-white rounded-xl flex items-center justify-center shrink-0 shadow-lg shadow-brand-900/20">
+                      <ShieldCheck className="w-5 h-5" />
+                    </div>
+                    <div className="text-left">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Experience Guide</p>
+                      <button 
+                        onClick={() => setShowDevInfo(true)}
+                        className="text-sm font-bold text-brand-900 hover:text-brand-600 transition-colors flex items-center gap-2 group"
+                      >
+                        How to use this CRM?
+                        <div className="w-5 h-5 rounded-full bg-brand-50 flex items-center justify-center group-hover:bg-brand-100 transition-colors">
+                          <ChevronRight className="w-3 h-3 text-brand-900" />
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+                  
                   <LanguageSelector />
                 </div>
               </div>
@@ -768,6 +1093,7 @@ function MainApp() {
                 <div className="glass p-8 sm:p-10 rounded-[3rem] shadow-2xl border border-white/20">
                   <StaffLogin 
                     onLoginSuccess={handleStaffLoginSuccess}
+                    onShowDevInfo={() => setShowDevInfo(true)}
                   />
                 </div>
 
@@ -1104,10 +1430,72 @@ function MainApp() {
         )}
 
         {view === 'staff-login' && (
-          <StaffLogin 
-            onLoginSuccess={handleStaffLoginSuccess}
-            onBack={() => setView('landing')}
-          />
+          <motion.div
+            key="staff-login"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="min-h-screen bg-slate-50 flex flex-col relative overflow-hidden"
+          >
+            {/* Background Decoration */}
+            <div className="absolute inset-0 z-0 pointer-events-none">
+              <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-brand-500/5 rounded-full blur-[120px]" />
+              <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-brand-900/5 rounded-full blur-[120px]" />
+            </div>
+
+            {/* Header */}
+            <header className="relative z-10 w-full py-8 px-6">
+              <div className="max-w-7xl mx-auto flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-brand-900 text-white rounded-xl flex items-center justify-center shadow-lg">
+                    <Utensils className="w-6 h-6" />
+                  </div>
+                  <span className="text-2xl font-bold font-serif text-brand-900">Tampa Taste</span>
+                </div>
+                
+                <div className="flex items-center gap-6">
+                  <div className="hidden lg:flex items-center gap-4 px-6 py-3 bg-white/80 backdrop-blur-md rounded-2xl border border-brand-100 shadow-sm hover:shadow-md transition-all">
+                    <div className="w-10 h-10 bg-brand-900 text-white rounded-xl flex items-center justify-center shrink-0 shadow-lg shadow-brand-900/20">
+                      <ShieldCheck className="w-5 h-5" />
+                    </div>
+                    <div className="text-left">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Experience Guide</p>
+                      <button 
+                        onClick={() => setShowDevInfo(true)}
+                        className="text-sm font-bold text-brand-900 hover:text-brand-600 transition-colors flex items-center gap-2 group"
+                      >
+                        How to use this CRM?
+                        <div className="w-5 h-5 rounded-full bg-brand-50 flex items-center justify-center group-hover:bg-brand-100 transition-colors">
+                          <ChevronRight className="w-3 h-3 text-brand-900" />
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <LanguageSelector />
+                </div>
+              </div>
+            </header>
+
+            <div className="relative z-10 flex-1 flex flex-col items-center justify-center px-6 py-12">
+              <div className="w-full max-w-md">
+                <div className="text-center mb-10">
+                  <div className="w-20 h-20 bg-brand-900 text-white rounded-[2.5rem] flex items-center justify-center mx-auto mb-6 shadow-2xl shadow-brand-900/20">
+                    <ShieldCheck className="w-10 h-10" />
+                  </div>
+                  <h1 className="text-4xl font-bold tracking-tight text-brand-900 font-serif mb-2">Staff Portal</h1>
+                  <p className="text-slate-500 text-sm font-medium uppercase tracking-widest">Authorized Access Only</p>
+                </div>
+
+                <div className="glass p-8 sm:p-10 rounded-[3rem] shadow-2xl border border-white/20">
+                  <StaffLogin 
+                    onLoginSuccess={handleStaffLoginSuccess}
+                    onBack={() => setView('landing')}
+                  />
+                </div>
+              </div>
+            </div>
+          </motion.div>
         )}
 
         {view === 'staff' && (
@@ -1118,14 +1506,6 @@ function MainApp() {
             exit={{ opacity: 0 }}
             className="h-screen"
           >
-            <div className="absolute top-4 right-4 z-50">
-              <button
-                onClick={handleLogout}
-                className="px-4 py-2 bg-white/80 backdrop-blur-md border border-black/5 rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-white transition-all shadow-sm"
-              >
-                Logout
-              </button>
-            </div>
             <StaffDashboard 
               bookings={bookings}
               onAddBooking={handleBookingComplete}
@@ -1145,17 +1525,24 @@ function MainApp() {
               onCancelOrder={handleCancelOrder}
               loyaltyTransactions={loyaltyTransactions}
               user={user}
+              addToast={addToast}
+              onLogout={handleLogout}
             />
           </motion.div>
         )}
       </AnimatePresence>
+
+      <DeveloperInfoDialog 
+        isOpen={showDevInfo} 
+        onClose={() => setShowDevInfo(false)} 
+      />
     </div>
   );
 }
 
 export default function App() {
   return (
-    <ErrorBoundary>
+    <ErrorBoundary FallbackComponent={ErrorFallback}>
       <FirebaseProvider>
         <MainApp />
       </FirebaseProvider>

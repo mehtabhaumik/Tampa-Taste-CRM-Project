@@ -9,7 +9,9 @@ import {
   Loader2, 
   AlertCircle,
   CheckCircle2,
-  Apple
+  Apple,
+  Globe,
+  Info
 } from 'lucide-react';
 import { 
   auth, 
@@ -26,16 +28,17 @@ import {
   signInWithPhoneNumber, 
   ConfirmationResult 
 } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { cn } from '../utils';
 import { useFirebase } from '../App';
 
 interface StaffLoginProps {
   onLoginSuccess: (roles: string[], employeeCode: string, firstName: string, lastName: string) => void;
+  onShowDevInfo?: () => void;
   onBack?: () => void;
 }
 
-export default function StaffLogin({ onLoginSuccess, onBack }: StaffLoginProps) {
+export default function StaffLogin({ onLoginSuccess, onShowDevInfo, onBack }: StaffLoginProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [employeeCode, setEmployeeCode] = useState('');
@@ -111,12 +114,21 @@ export default function StaffLogin({ onLoginSuccess, onBack }: StaffLoginProps) 
                 employeeCode: trimmedCode,
                 displayName: employee.name || 'Staff',
                 firstName: employee.firstName || '',
-                lastName: employee.lastName || ''
+                lastName: employee.lastName || '',
+                lastLoggedIn: serverTimestamp()
               }, { merge: true });
               
-              // Add a small delay to ensure Firestore propagation before navigating
+              // Add a small delay to ensure the users document is available for the next update
+              await new Promise(resolve => setTimeout(resolve, 1000));
+
+              // 4. Update the employee record with the last login timestamp
+              await setDoc(doc(db, 'employees', trimmedCode), {
+                lastLoggedIn: serverTimestamp()
+              }, { merge: true });
+              
+              // Add a larger delay to ensure Firestore propagation before navigating
               // This helps prevent "Missing or insufficient permissions" errors on the dashboard
-              await new Promise(resolve => setTimeout(resolve, 2000));
+              await new Promise(resolve => setTimeout(resolve, 4000));
             } catch (userErr: any) {
               handleFirestoreError(userErr, OperationType.WRITE, `users/${currentUser.uid}`);
               throw userErr;
@@ -153,22 +165,22 @@ export default function StaffLogin({ onLoginSuccess, onBack }: StaffLoginProps) 
         )}
 
         <div className="space-y-6">
-          <div className="p-4 bg-brand-50 rounded-2xl border border-brand-100">
-            <p className="text-xs text-brand-900 font-medium leading-relaxed">
+          <div className="p-4 bg-brand-100 rounded-2xl border border-brand-200">
+            <p className="text-xs text-brand-950 font-semibold leading-relaxed">
               Please enter your unique 4-digit employee code to access the staff dashboard.
             </p>
           </div>
 
           <form onSubmit={handleCodeLogin} className="space-y-4">
             <div className="relative">
-              <Key className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300" />
+              <Key className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
               <input
                 type="password"
                 required
                 placeholder="Enter Employee Code"
                 value={employeeCode}
                 onChange={(e) => setEmployeeCode(e.target.value)}
-                className="w-full p-5 pl-14 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-brand-500 text-lg font-medium tracking-widest text-center"
+                className="w-full p-5 pl-14 bg-white rounded-2xl border border-slate-200 focus:ring-2 focus:ring-brand-500 text-lg font-bold tracking-widest text-center text-slate-900 placeholder:text-slate-400"
               />
             </div>
             <button
@@ -181,6 +193,16 @@ export default function StaffLogin({ onLoginSuccess, onBack }: StaffLoginProps) 
               )}
             </button>
           </form>
+
+          {onShowDevInfo && (
+            <button
+              onClick={onShowDevInfo}
+              className="w-full p-4 bg-brand-50 text-brand-900 rounded-2xl border border-brand-100 flex items-center justify-center gap-2 text-xs font-bold uppercase tracking-widest hover:bg-brand-100 transition-all"
+            >
+              <Info className="w-4 h-4" />
+              How to use this CRM?
+            </button>
+          )}
         </div>
 
         {onBack && (

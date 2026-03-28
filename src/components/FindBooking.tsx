@@ -4,7 +4,7 @@ import { Search, Calendar, Clock, Users, Table as TableIcon, X, AlertCircle, Che
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, query, where, getDocs, doc, getDoc, updateDoc, deleteDoc, limit } from 'firebase/firestore';
 import { Booking } from '../types';
-import { cn, formatCurrency } from '../utils';
+import { cn, formatCurrency, formatPhoneNumber } from '../utils';
 import { sendEmail } from '../lib/emailService';
 import { getReservationEmail } from '../lib/emailTemplates';
 import BookingForm from './BookingForm';
@@ -18,6 +18,7 @@ export default function FindBooking() {
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -89,7 +90,7 @@ export default function FindBooking() {
 
   const handleCancel = async () => {
     if (!booking) return;
-    if (!window.confirm('Are you sure you want to cancel this reservation?')) return;
+    setShowCancelConfirm(false);
 
     setLoading(true);
     try {
@@ -182,8 +183,16 @@ export default function FindBooking() {
                 required
                 placeholder="Enter Booking ID or Phone Number"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full p-5 pl-14 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-brand-500 text-lg font-medium transition-all"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  // If it's mostly digits, try formatting as phone
+                  if (val.replace(/[^\d]/g, '').length > 0 && !val.startsWith('BK-')) {
+                    setSearchQuery(formatPhoneNumber(val));
+                  } else {
+                    setSearchQuery(val);
+                  }
+                }}
+                className="w-full p-5 pl-14 bg-white rounded-2xl border border-slate-200 focus:ring-2 focus:ring-brand-500 text-lg font-bold text-slate-900 placeholder:text-slate-400 transition-all shadow-sm"
               />
             </div>
             <button
@@ -298,7 +307,7 @@ export default function FindBooking() {
                               <Edit3 className="w-4 h-4" /> Edit Booking
                             </button>
                             <button
-                              onClick={handleCancel}
+                              onClick={() => setShowCancelConfirm(true)}
                               disabled={loading}
                               className="flex-1 p-4 bg-red-50 text-red-600 rounded-xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-red-100 transition-all"
                             >
@@ -351,6 +360,43 @@ export default function FindBooking() {
           </AnimatePresence>
         </div>
       </div>
+
+      <AnimatePresence>
+        {showCancelConfirm && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="w-full max-w-md bg-white rounded-[2rem] p-8 shadow-2xl text-center"
+            >
+              <div className="w-16 h-16 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                <Trash2 className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-bold mb-2 font-serif text-brand-900">Cancel Reservation?</h2>
+              <p className="text-slate-400 mb-8">Are you sure you want to cancel this reservation? This action cannot be undone.</p>
+              <div className="flex gap-4">
+                <button 
+                  onClick={() => setShowCancelConfirm(false)}
+                  className="flex-1 p-4 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-all"
+                >
+                  No, Keep It
+                </button>
+                <button 
+                  onClick={handleCancel}
+                  className="flex-1 p-4 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-all shadow-lg shadow-red-600/20"
+                >
+                  Yes, Cancel
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

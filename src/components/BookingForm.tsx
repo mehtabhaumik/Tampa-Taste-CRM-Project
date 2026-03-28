@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { Calendar, Users, Clock, Utensils, Table as TableIcon, CheckCircle2, ChevronRight, Star, Loader2 } from 'lucide-react';
 import { Booking, MenuItem } from '../types';
 import { TABLES } from '../constants';
-import { cn, formatCurrency } from '../utils';
+import { cn, formatCurrency, formatPhoneNumber, validateEmail, validateNoNumerics } from '../utils';
 import { useFirebase } from '../App';
 import { useLanguage } from './LanguageContext';
 import { loyaltyService } from '../services/loyaltyService';
@@ -43,6 +43,7 @@ export default function BookingForm({ onBookingComplete, onCancel, initialData, 
     tableNumber: initialData?.tableNumber || 0,
     orderedItems: initialData?.orderedItems || [] as { itemId: string; quantity: number }[]
   });
+  const [errors, setErrors] = useState<{ [key: string]: string }>({});
 
   const fetchAvailability = async () => {
     if (!formData.date || !formData.time) return;
@@ -69,6 +70,16 @@ export default function BookingForm({ onBookingComplete, onCancel, initialData, 
 
   const handleNext = async () => {
     if (step === 1) {
+      const newErrors: { [key: string]: string } = {};
+      if (!validateEmail(formData.email)) newErrors.email = 'Invalid email address';
+      if (!validateNoNumerics(formData.name)) newErrors.name = 'Name cannot contain numbers';
+      if (formData.phoneNumber.replace(/[^\d]/g, '').length < 10) newErrors.phoneNumber = 'Invalid phone number';
+
+      if (Object.keys(newErrors).length > 0) {
+        setErrors(newErrors);
+        return;
+      }
+      setErrors({});
       await fetchAvailability();
     }
     setStep(s => s + 1);
@@ -217,10 +228,17 @@ export default function BookingForm({ onBookingComplete, onCancel, initialData, 
                       required
                       type="text"
                       value={formData.name}
-                      onChange={e => setFormData({ ...formData, name: e.target.value })}
-                      className="w-full p-5 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-brand-500 transition-all font-medium"
+                      onChange={e => {
+                        setFormData({ ...formData, name: e.target.value });
+                        if (errors.name) setErrors({ ...errors, name: '' });
+                      }}
+                      className={cn(
+                        "w-full p-5 bg-white rounded-2xl border border-slate-200 focus:ring-2 focus:ring-brand-500 transition-all font-medium text-slate-900 placeholder:text-slate-400",
+                        errors.name && "border-red-500 focus:ring-red-500"
+                      )}
                       placeholder="John Doe"
                     />
+                    {errors.name && <p className="text-red-500 text-[10px] mt-1 font-bold uppercase tracking-widest">{errors.name}</p>}
                   </div>
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-widest text-brand-600 mb-2">Email Address</label>
@@ -228,10 +246,17 @@ export default function BookingForm({ onBookingComplete, onCancel, initialData, 
                       required
                       type="email"
                       value={formData.email}
-                      onChange={e => setFormData({ ...formData, email: e.target.value })}
-                      className="w-full p-5 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-brand-500 transition-all font-medium"
+                      onChange={e => {
+                        setFormData({ ...formData, email: e.target.value });
+                        if (errors.email) setErrors({ ...errors, email: '' });
+                      }}
+                      className={cn(
+                        "w-full p-5 bg-white rounded-2xl border border-slate-200 focus:ring-2 focus:ring-brand-500 transition-all font-medium text-slate-900 placeholder:text-slate-400",
+                        errors.email && "border-red-500 focus:ring-red-500"
+                      )}
                       placeholder="john@example.com"
                     />
+                    {errors.email && <p className="text-red-500 text-[10px] mt-1 font-bold uppercase tracking-widest">{errors.email}</p>}
                   </div>
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-widest text-brand-600 mb-2">Phone Number</label>
@@ -239,10 +264,17 @@ export default function BookingForm({ onBookingComplete, onCancel, initialData, 
                       required
                       type="tel"
                       value={formData.phoneNumber}
-                      onChange={e => setFormData({ ...formData, phoneNumber: e.target.value })}
-                      className="w-full p-5 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-brand-500 transition-all font-medium"
-                      placeholder="+1 (555) 000-0000"
+                      onChange={e => {
+                        setFormData({ ...formData, phoneNumber: formatPhoneNumber(e.target.value) });
+                        if (errors.phoneNumber) setErrors({ ...errors, phoneNumber: '' });
+                      }}
+                      className={cn(
+                        "w-full p-5 bg-white rounded-2xl border border-slate-200 focus:ring-2 focus:ring-brand-500 transition-all font-medium text-slate-900 placeholder:text-slate-400",
+                        errors.phoneNumber && "border-red-500 focus:ring-red-500"
+                      )}
+                      placeholder="(555) 000-0000"
                     />
+                    {errors.phoneNumber && <p className="text-red-500 text-[10px] mt-1 font-bold uppercase tracking-widest">{errors.phoneNumber}</p>}
                   </div>
                 </div>
 
@@ -290,7 +322,7 @@ export default function BookingForm({ onBookingComplete, onCancel, initialData, 
                       min={new Date().toISOString().split('T')[0]}
                       value={formData.date}
                       onChange={e => setFormData({ ...formData, date: e.target.value })}
-                      className="w-full p-5 pl-14 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-brand-500 transition-all font-medium"
+                      className="w-full p-5 pl-14 bg-white rounded-2xl border border-slate-200 focus:ring-2 focus:ring-brand-500 transition-all font-medium text-slate-900"
                     />
                   </div>
                 </div>
@@ -334,6 +366,28 @@ export default function BookingForm({ onBookingComplete, onCancel, initialData, 
                 <div className="col-span-full flex flex-col items-center justify-center py-12 text-slate-400">
                   <Loader2 className="w-8 h-8 animate-spin mb-2" />
                   <p className="text-sm">Checking availability...</p>
+                </div>
+              ) : bookedTables.length === TABLES.length ? (
+                <div className="col-span-full p-8 bg-brand-50 rounded-3xl border border-brand-100 text-center space-y-4">
+                  <div className="w-16 h-16 bg-brand-100 rounded-full flex items-center justify-center mx-auto">
+                    <Clock className="w-8 h-8 text-brand-600" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-brand-900">Fully Booked</h3>
+                    <p className="text-slate-500 text-sm">All tables are currently reserved for {formData.date} at {formData.time}.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const waitlistSection = document.getElementById('waitlist');
+                      if (waitlistSection) {
+                        waitlistSection.scrollIntoView({ behavior: 'smooth' });
+                      }
+                    }}
+                    className="inline-flex items-center gap-2 px-6 py-3 bg-brand-900 text-white rounded-xl font-bold hover:bg-brand-800 transition-all shadow-lg"
+                  >
+                    Join the Waitlist <ChevronRight className="w-4 h-4" />
+                  </button>
                 </div>
               ) : (
                 TABLES.map((table) => {
